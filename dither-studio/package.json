@@ -1,0 +1,34 @@
+{
+  "name": "dither-studio",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Standalone dither noise + video processor for DaVinci Resolve. Renders the same animated dither background and video shader from w3rk17 to a PNG sequence importable into Resolve.",
+  "scripts": {
+    "dev": "concurrently -k -n API,VITE -c cyan,green \"tsx server/index.ts\" \"vite\"",
+    "server": "tsx server/index.ts",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "multer": "^2.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/three": "^0.169.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.5.3",
+    "vite": "^5.4.1"
+  }
+}

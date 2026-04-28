@@ -1,4 +1,22 @@
 .assemblyai_key
+.env
+.env.*
+node_modules/
+dist/
+dither-studio/node_modules/
+dither-studio/dist/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Projects & Media
+projects/
+*.mp4
+*.mov
+*.m4a
+*.wav
+*.aac
+*.mp3
+*.transcript.json
+transcript.json
+caption.json

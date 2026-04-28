@@ -1,0 +1,146 @@
+import * as THREE from 'three';
+import {
+  dancingVideoFragmentShader,
+  dancingVideoVertexShader,
+  dancingVideoShaderUniforms,
+} from '../shaders/videoShader';
+import type { VideoShaderParams } from './types';
+
+/**
+ * Renders an HTMLVideoElement through the single-pass video shader
+ * (the same shader the live site uses for the talking video — see
+ * w3rk17/src/shaders/dancingVideoShader.ts).
+ */
+export class VideoRenderer {
+  readonly renderer: THREE.WebGLRenderer;
+  private scene = new THREE.Scene();
+  private camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private material: THREE.ShaderMaterial;
+  private videoTexture: THREE.VideoTexture | null = null;
+  private video: HTMLVideoElement | null = null;
+  private params: VideoShaderParams;
+  private width = 1;
+  private height = 1;
+  private startTime = performance.now();
+
+  constructor(canvas: HTMLCanvasElement, params: VideoShaderParams) {
+    this.params = { ...params };
+
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+      preserveDrawingBuffer: true,
+    });
+    this.renderer.setPixelRatio(1);
+    this.renderer.setClearColor(0x000000, 0);
+
+    this.material = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.clone(dancingVideoShaderUniforms),
+      vertexShader: dancingVideoVertexShader,
+      fragmentShader: dancingVideoFragmentShader,
+      transparent: true,
+    });
+    this.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material));
+
+    this.applyParams();
+  }
+
+  setVideo(video: HTMLVideoElement | null) {
+    if (this.videoTexture) {
+      this.videoTexture.dispose();
+      this.videoTexture = null;
+    }
+    this.video = video;
+    if (video) {
+      const tex = new THREE.VideoTexture(video);
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.format = THREE.RGBAFormat;
+      this.videoTexture = tex;
+      this.material.uniforms.tDiffuse.value = tex;
+    } else {
+      this.material.uniforms.tDiffuse.value = null;
+    }
+  }
+
+  getVideo(): HTMLVideoElement | null { return this.video; }
+
+  setSize(width: number, height: number) {
+    this.width = Math.max(1, Math.floor(width));
+    this.height = Math.max(1, Math.floor(height));
+    this.renderer.setSize(this.width, this.height, true);
+    (this.material.uniforms.uResolution.value as { x: number; y: number }).x = this.width;
+    (this.material.uniforms.uResolution.value as { x: number; y: number }).y = this.height;
+  }
+
+  setParams(p: VideoShaderParams) {
+    this.params = { ...p };
+    this.applyParams();
+  }
+
+  private applyParams() {
+    const u = this.material.uniforms;
+    const p = this.params;
+    u.uBlackPoint.value = p.blackPoint;
+    u.uWhitePoint.value = p.whitePoint;
+    u.uBrightness.value = p.brightness;
+    u.uContrast.value = p.contrast;
+    u.uShadows.value = p.shadows;
+    u.uMidtones.value = p.midtones;
+    u.uHighlights.value = p.highlights;
+    u.uExposure.value = p.exposure;
+    u.uGamma.value = p.gamma;
+    u.uSaturation.value = p.saturation;
+    u.uClarity.value = p.clarity;
+    u.uRotation.value = p.rotation;
+    u.uScale.value = p.scale;
+    u.uDistortionFrequency.value = p.distortionFrequency;
+    u.uDistortionAmplitude.value = p.distortionAmplitude;
+    u.uDistortionSpeed.value = p.distortionSpeed;
+    u.uDistortionAngle.value = p.distortionAngle;
+    u.uDitherEnabled.value = p.ditherEnabled;
+    u.uDitherType.value = p.ditherType;
+    u.uDitherScale.value = p.ditherScale;
+    u.uThreshold.value = p.threshold;
+    u.uAlphaThreshold.value = p.alphaThreshold;
+    u.uUseSingleColor.value = p.useSingleColor;
+    u.uIsDarkMode.value = p.isDarkMode;
+    setVec3FromHex(u.uDitherColor.value, p.ditherColor);
+    setVec3FromHex(u.uLightModeColor.value, p.lightModeColor);
+    setVec3FromHex(u.uDarkModeColor.value, p.darkModeColor);
+  }
+
+  /** Render the current video frame. */
+  renderFrame() {
+    // Always keep the renderer transparent so the shader's alpha output
+    // (uAlphaThreshold + dither masking) is preserved both in the preview
+    // and in the exported PNGs.
+    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.setRenderTarget(null);
+    if (!this.videoTexture) {
+      this.renderer.clear();
+      return;
+    }
+    this.videoTexture.needsUpdate = true;
+    this.material.uniforms.uTime.value = (performance.now() - this.startTime) / 1000;
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  dispose() {
+    if (this.videoTexture) this.videoTexture.dispose();
+    this.material.dispose();
+    this.renderer.dispose();
+  }
+}
+
+function setVec3FromHex(target: { x: number; y: number; z: number } | THREE.Color, hex: string) {
+  const c = new THREE.Color(hex);
+  if (target instanceof THREE.Color) {
+    target.copy(c);
+  } else {
+    target.x = c.r;
+    target.y = c.g;
+    target.z = c.b;
+  }
+}
