@@ -7,7 +7,8 @@ import {
   type BackgroundParams, type DitherParams, type VideoShaderParams, type ExportParams, type CaptionStyle,
 } from '../lib/types';
 import { PRESETS, VIDEO_PRESETS } from '../lib/presets';
-import { canvasToPngBlob, frameNumber, seekVideoTo, writePng } from '../lib/exporter';
+import { canvasToPngBlob, frameNumber, seekVideoTo } from '../lib/exporter';
+import { drawCaptionsToCanvas } from '../lib/captionCanvas';
 import { Section, Select, Slider, Toggle } from './Controls';
 import {
   BackgroundControls, DitherControls,
@@ -23,6 +24,7 @@ import { StatusToast, type Toast } from './StatusToast';
 import {
   listProjects, createProject, getProject, saveSettings,
   uploadVideo, uploadCaption, getVideoUrl, getTranscript, openEventStream,
+  createProjectExport, uploadExportFrame, finishProjectExport,
   type ProjectMeta,
 } from '../lib/projectApi';
 
@@ -157,6 +159,7 @@ const CaptionFontControls: React.FC<{ value: CaptionStyle; onChange: (v: Caption
       <Slider label="weight" value={value.fontWeight} min={300} max={900} step={100} onChange={(v) => set({ fontWeight: Math.round(v / 100) * 100 })} />
       <Slider label="tracking" value={value.letterSpacing} min={0} max={0.2} step={0.005} onChange={(v) => set({ letterSpacing: v })} />
       <Slider label="line height" value={value.lineHeight} min={0.9} max={2.2} step={0.05} onChange={(v) => set({ lineHeight: v })} />
+      <Slider label="line width %" value={value.lineMaxWidth} min={10} max={100} step={1} onChange={(v) => set({ lineMaxWidth: Math.round(v) })} />
       <Slider label="horizontal pos" value={value.horizontalPosition} min={0} max={100} step={1} onChange={(v) => set({ horizontalPosition: Math.round(v) })} />
       <Slider label="vertical pos" value={value.verticalPosition} min={0} max={100} step={1} onChange={(v) => set({ verticalPosition: Math.round(v) })} />
       <Select
@@ -194,10 +197,8 @@ export const App: React.FC = () => {
   const [captionMode, setCaptionMode] = useState<CaptionMode>('line');
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
 
-  // composition guides (overlay rectangles at fixed pixel sizes)
-  const [guidesOn, setGuidesOn] = useState<Record<GuideKey, boolean>>({
-    '1080x1350': false, '1080x1080': false, '1920x1080': false, '1080x1920': false,
-  });
+  // composition guides — only one can be active at a time
+  const [activeGuide, setActiveGuide] = useState<GuideKey | null>(null);
   const [cropToGuide, setCropToGuide] = useState(false);
   const [previewSize, setPreviewSize] = useState({ w: 0, h: 0 });
 
@@ -212,9 +213,6 @@ export const App: React.FC = () => {
   const [videoInfo, setVideoInfo] = useState<{ name: string; duration: number; w: number; h: number } | null>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
-
-  // export source picker (defaults to whichever was last viewed)
-  const [exportSource, setExportSource] = useState<'background' | 'video'>('background');
 
   // ---------- project management ----------
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
@@ -296,12 +294,8 @@ export const App: React.FC = () => {
   }, []);
 
   // mirror state into refs the raf loop reads
-  const mainTabRef = useRef(mainTab);
-  const exportSourceRef = useRef(exportSource);
   const bgLayerOnRef = useRef(bgLayerOn);
   const videoLayerOnRef = useRef(videoLayerOn);
-  useEffect(() => { mainTabRef.current = mainTab; }, [mainTab]);
-  useEffect(() => { exportSourceRef.current = exportSource; }, [exportSource]);
   useEffect(() => { bgLayerOnRef.current = bgLayerOn; }, [bgLayerOn]);
   useEffect(() => { videoLayerOnRef.current = videoLayerOn; }, [videoLayerOn]);
 
@@ -317,10 +311,10 @@ export const App: React.FC = () => {
     videoRendererRef.current?.setSize(w, h);
   }, [previewFrame.w, previewFrame.h]);
   useEffect(() => {
-    if (!verticalVideo || !guidesOn['1920x1080']) return;
-    setGuidesOn((s) => ({ ...s, '1920x1080': false }));
+    if (!verticalVideo || activeGuide !== '1920x1080') return;
+    setActiveGuide(null);
     setCropToGuide(false);
-  }, [verticalVideo, guidesOn]);
+  }, [verticalVideo, activeGuide]);
 
   // ---------- auto-save settings to active project ----------
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -331,11 +325,11 @@ export const App: React.FC = () => {
       saveSettings(activeProjectId, {
         background: bg, backgroundDither: bgDither, video: vid,
         captionMode, captionStyle, layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn },
-        guides: guidesOn, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
-        ui: { mainTab, bgSubTab, videoSubTab, exportSource, muted },
+        activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
+        ui: { mainTab, bgSubTab, videoSubTab, muted },
       }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, captionMode, captionStyle, bgLayerOn, videoLayerOn, captionsLayerOn, guidesOn, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, exportSource, muted]);
+  }, [activeProjectId, bg, bgDither, vid, captionMode, captionStyle, bgLayerOn, videoLayerOn, captionsLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, muted]);
 
   // ---------- SSE stream for transcription progress ----------
   useEffect(() => {
@@ -402,13 +396,12 @@ export const App: React.FC = () => {
       setMainTab('video');
       setBgSubTab('noise');
       setVideoSubTab('levels');
-      setExportSource('video');
       setBg(DEFAULT_BACKGROUND);
       setBgDither(DEFAULT_DITHER);
       setVid(DEFAULT_VIDEO);
       setBgExport({ ...DEFAULT_EXPORT, filenamePrefix: 'bg' });
       setVidExport({ ...DEFAULT_EXPORT, filenamePrefix: 'talking' });
-      setGuidesOn({ '1080x1350': false, '1080x1080': false, '1920x1080': false, '1080x1920': false });
+      setActiveGuide(null);
       setCropToGuide(false);
       setBgLayerOn(true);
       setVideoLayerOn(true);
@@ -448,7 +441,6 @@ export const App: React.FC = () => {
         if (proj.ui.mainTab) setMainTab(proj.ui.mainTab);
         if (proj.ui.bgSubTab) setBgSubTab(proj.ui.bgSubTab);
         if (proj.ui.videoSubTab) setVideoSubTab(proj.ui.videoSubTab);
-        if (proj.ui.exportSource) setExportSource(proj.ui.exportSource);
         if (typeof proj.ui.muted === 'boolean') setMuted(proj.ui.muted);
       }
       if (proj.layers) {
@@ -456,7 +448,16 @@ export const App: React.FC = () => {
         setVideoLayerOn(proj.layers.video ?? true);
         setCaptionsLayerOn(proj.layers.captions ?? true);
       }
-      if (proj.guides) setGuidesOn(proj.guides);
+      if (proj.activeGuide !== undefined) {
+        setActiveGuide(proj.activeGuide as GuideKey | null);
+      } else if (proj.guides) {
+        // migrate old multi-select format → first selected key
+        const first = (Object.entries(proj.guides) as [GuideKey, boolean][])
+          .find(([, on]) => on)?.[0] ?? null;
+        setActiveGuide(first);
+      } else {
+        setActiveGuide(null);
+      }
       if (proj.cropToGuide !== undefined) setCropToGuide(proj.cropToGuide);
       if (proj.exportBackground) setBgExport(proj.exportBackground);
       if (proj.exportVideo) setVidExport(proj.exportVideo);
@@ -544,6 +545,32 @@ export const App: React.FC = () => {
     else { v.pause(); setPlaying(false); }
   };
 
+  // ---------- keyboard shortcuts: space = play/pause, m = mute/unmute ----------
+  useEffect(() => {
+    const isEditableTarget = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      if (el.isContentEditable) return true;
+      return false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isEditableTarget(e.target)) return;
+      if (e.code === 'Space') {
+        if (!videoElRef.current) return;
+        e.preventDefault();
+        togglePlay();
+      } else if (e.key === 'm' || e.key === 'M') {
+        if (!videoElRef.current) return;
+        e.preventDefault();
+        setMuted((m) => !m);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // ---------- transcript file load ----------
   const loadTranscriptFile = (file: File) => {
     const reader = new FileReader();
@@ -588,24 +615,87 @@ export const App: React.FC = () => {
     videoRendererRef.current?.setSize(w, h);
   };
 
-  const exportBackground = async (
-    dir: FileSystemDirectoryHandle,
+  const exportComposition = async (
     onProgress: (done: number, total: number) => void
   ) => {
-    const r = bgRendererRef.current;
-    if (!r) return;
+    const projectId = activeProjectIdRef.current;
+    if (!projectId) throw new Error('Create or select a project before exporting.');
+    if (!bgLayerOn && !videoLayerOn && !captionsLayerOn) throw new Error('Turn on at least one layer before exporting.');
+
+    const bgRenderer = bgRendererRef.current;
+    const videoRenderer = videoRendererRef.current;
+    const video = videoElRef.current;
+    const params = videoInfo ? vidExport : bgExport;
+    if (videoLayerOn && (!videoRenderer || !video)) throw new Error('Load a video before exporting the video layer.');
+
+    const width = Math.max(1, Math.floor(params.width));
+    const height = Math.max(1, Math.floor(params.height));
+    const duration = videoInfo
+      ? Math.max(0.01, Math.min(videoInfo.duration - params.startSecond, params.duration))
+      : params.duration;
+    const total = Math.max(1, Math.ceil(duration * params.fps));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Could not create export canvas.');
+
     exportingRef.current = true;
+    if (video) { video.pause(); setPlaying(false); }
+    const toastId = addToast('Creating project export folder…', 'progress', true);
+
     try {
-      r.setSize(bgExport.width, bgExport.height);
-      const total = Math.max(1, Math.ceil(bgExport.duration * bgExport.fps));
+      bgRenderer?.setSize(width, height);
+      videoRenderer?.setSize(width, height);
+      const created = await createProjectExport(projectId, {
+        prefix: params.filenamePrefix,
+        width,
+        height,
+        fps: params.fps,
+        totalFrames: total,
+        layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn },
+      });
+      setProjectStatus({ kind: 'progress', message: 'Exporting PNG sequence', detail: created.folder, progress: 0 });
+      updateToast(toastId, `Exporting to ${created.folder}`, 'progress');
+
       for (let i = 0; i < total; i++) {
-        const t = bgExport.startSecond + i / bgExport.fps;
-        r.renderFrame(t);
-        const blob = await canvasToPngBlob(r.renderer.domElement as HTMLCanvasElement);
-        await writePng(dir, `${bgExport.filenamePrefix}_${frameNumber(i)}.png`, blob);
+        const t = params.startSecond + i / params.fps;
+        ctx.clearRect(0, 0, width, height);
+
+        if (bgLayerOn && bgRenderer) {
+          bgRenderer.renderFrame(t);
+          ctx.drawImage(bgRenderer.renderer.domElement as HTMLCanvasElement, 0, 0, width, height);
+        }
+
+        if (videoLayerOn && videoRenderer && video) {
+          if (t > video.duration) break;
+          await seekVideoTo(video, t);
+          videoRenderer.renderFrame();
+          ctx.drawImage(videoRenderer.renderer.domElement as HTMLCanvasElement, 0, 0, width, height);
+        }
+
+        if (captionsLayerOn && transcript) {
+          drawCaptionsToCanvas(ctx, transcript, captionMode, t * 1000, width, height, captionStyle);
+        }
+
+        const blob = await canvasToPngBlob(canvas);
+        await uploadExportFrame(projectId, created.exportId, `${params.filenamePrefix}_${frameNumber(i)}.png`, blob);
         onProgress(i + 1, total);
-        if (i % 4 === 0) await new Promise((res) => setTimeout(res, 0));
+        if (i % 2 === 0) {
+          const pct = Math.round(((i + 1) / total) * 100);
+          setProjectStatus({ kind: 'progress', message: 'Exporting PNG sequence', detail: created.folder, progress: pct });
+          await new Promise((res) => setTimeout(res, 0));
+        }
       }
+
+      const finished = await finishProjectExport(projectId, created.exportId);
+      setProjectStatus({ kind: 'success', message: 'PNG sequence exported', detail: finished.folder });
+      updateToast(toastId, `Export complete: ${finished.folder}`, 'success');
+      return finished.folder;
+    } catch (error: any) {
+      updateToast(toastId, `Export failed: ${error?.message ?? error}`, 'error');
+      setProjectStatus({ kind: 'error', message: `Export failed: ${error?.message ?? error}` });
+      throw error;
     } finally {
       fitPreviewBack();
       startRef.current = performance.now();
@@ -613,36 +703,15 @@ export const App: React.FC = () => {
     }
   };
 
-  const exportVideo = async (
-    dir: FileSystemDirectoryHandle,
-    onProgress: (done: number, total: number) => void
-  ) => {
-    const r = videoRendererRef.current;
-    const v = videoElRef.current;
-    if (!r || !v) return;
-    exportingRef.current = true;
-    v.pause(); setPlaying(false);
-    try {
-      r.setSize(vidExport.width, vidExport.height);
-      const total = Math.max(1, Math.ceil(vidExport.duration * vidExport.fps));
-      for (let i = 0; i < total; i++) {
-        const t = vidExport.startSecond + i / vidExport.fps;
-        if (t > v.duration) break;
-        await seekVideoTo(v, t);
-        r.renderFrame();
-        const blob = await canvasToPngBlob(r.renderer.domElement as HTMLCanvasElement);
-        await writePng(dir, `${vidExport.filenamePrefix}_${frameNumber(i)}.png`, blob);
-        onProgress(i + 1, total);
-        if (i % 2 === 0) await new Promise((res) => setTimeout(res, 0));
-      }
-    } finally {
-      fitPreviewBack();
-      exportingRef.current = false;
-    }
-  };
-
   // ---------- layout ----------
   const activeProject = projects.find((p) => p.id === activeProjectId);
+  const activeExportParams = videoInfo ? vidExport : bgExport;
+  const setActiveExportParams = videoInfo ? setVidExport : setBgExport;
+  const exportLayerSummary = [
+    bgLayerOn ? 'background' : null,
+    videoLayerOn ? 'video' : null,
+    captionsLayerOn ? 'captions' : null,
+  ].filter(Boolean).join(' + ') || 'none';
   const frameStyle: React.CSSProperties = videoInfo
     ? { position: 'absolute', left: previewFrame.x, top: previewFrame.y, width: previewFrame.w, height: previewFrame.h }
     : { position: 'absolute', inset: 0, width: '100%', height: '100%' };
@@ -675,9 +744,10 @@ export const App: React.FC = () => {
           style={{ ...frameStyle, display: videoLayerOn ? 'block' : 'none' }}
         />
 
-        {/* composition guides (outlines) */}
-        {availableGuides.map((g) => {
-          if (!guidesOn[g.key]) return null;
+        {/* composition guide outline (only the active one) */}
+        {(() => {
+          const g = availableGuides.find((x) => x.key === activeGuide);
+          if (!g) return null;
           const r = guideRectInVideoFrame(previewFrame, videoInfo, g);
           return (
             <div
@@ -695,11 +765,11 @@ export const App: React.FC = () => {
               }}>{g.label}</div>
             </div>
           );
-        })}
+        })()}
 
         {/* crop mask: black-out everything outside the active guide */}
         {cropToGuide && (() => {
-          const active = availableGuides.find((g) => guidesOn[g.key]);
+          const active = availableGuides.find((g) => g.key === activeGuide);
           if (!active) return null;
           const r = guideRectInVideoFrame(previewFrame, videoInfo, active);
           const mask = '#000';
@@ -713,10 +783,24 @@ export const App: React.FC = () => {
           );
         })()}
 
-        {/* captions overlay */}
-        {captionsLayerOn && transcript && (
-          <Captions transcript={transcript} mode={captionMode} style={captionStyle} frame={previewFrame} timeSourceRef={videoElRef} />
-        )}
+        {/* captions overlay — when crop is on, constrain captions to the active guide rect */}
+        {captionsLayerOn && transcript && (() => {
+          const guide = cropToGuide
+            ? availableGuides.find((g) => g.key === activeGuide)
+            : undefined;
+          const captionFrame = guide
+            ? guideRectInVideoFrame(previewFrame, videoInfo, guide)
+            : previewFrame;
+          return (
+            <Captions
+              transcript={transcript}
+              mode={captionMode}
+              style={captionStyle}
+              frame={captionFrame}
+              timeSourceRef={videoElRef}
+            />
+          );
+        })()}
 
         {/* status toasts */}
         <StatusToast toasts={toasts} onDismiss={dismissToast} />
@@ -739,7 +823,9 @@ export const App: React.FC = () => {
       </div>
 
       {/* right panel */}
-      <div style={{ borderLeft: '1px solid #1f1f1f', display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, background: '#0c0c0c' }}>
+      <div style={{ borderLeft: '1px solid #1f1f1f', display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100vh', background: '#0c0c0c' }}>
+        {/* fixed header: project bar through main tab row */}
+        <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
         <ProjectBar
           projects={projects}
           activeId={activeProjectId}
@@ -787,8 +873,8 @@ export const App: React.FC = () => {
             <PillToggle
               key={g.key}
               label={g.label}
-              on={guidesOn[g.key]}
-              onClick={() => setGuidesOn((s) => ({ ...s, [g.key]: !s[g.key] }))}
+              on={activeGuide === g.key}
+              onClick={() => setActiveGuide((curr) => (curr === g.key ? null : g.key))}
             />
           ))}
           <span style={{ width: 1, alignSelf: 'stretch', background: '#222', margin: '0 4px' }} />
@@ -810,7 +896,9 @@ export const App: React.FC = () => {
           onChange={setMainTab}
           variant="main"
         />
-        <div style={{ overflowY: 'auto', padding: 10, flex: 1, minHeight: 0 }}>
+        </div>
+        {/* scrollable tab content */}
+        <div style={{ overflowY: 'auto', padding: 10, flex: '1 1 0', minHeight: 0 }}>
           {mainTab === 'background' && (
             <>
               <Section title="Preset">
@@ -947,33 +1035,13 @@ export const App: React.FC = () => {
           )}
 
           {mainTab === 'export' && (
-            <>
-              <Section title="Source">
-                <Select
-                  label="export from"
-                  value={exportSource}
-                  options={[
-                    { label: 'Background', value: 'background' },
-                    { label: 'Video', value: 'video' },
-                  ]}
-                  onChange={(v) => setExportSource(v as 'background' | 'video')}
-                />
-              </Section>
-              {exportSource === 'background' ? (
-                <ExportPanel params={bgExport} onChange={setBgExport} onExport={exportBackground} />
-              ) : !videoInfo ? (
-                <Section title="Export">
-                  <div style={{ color: '#ff6b6b' }}>Load a video on the Video tab first.</div>
-                </Section>
-              ) : (
-                <ExportPanel
-                  params={vidExport}
-                  onChange={setVidExport}
-                  onExport={exportVideo}
-                  lockedDuration={videoInfo.duration}
-                />
-              )}
-            </>
+            <ExportPanel
+              params={activeExportParams}
+              onChange={setActiveExportParams}
+              onExport={exportComposition}
+              lockedDuration={videoInfo?.duration}
+              layerSummary={exportLayerSummary}
+            />
           )}
         </div>
       </div>

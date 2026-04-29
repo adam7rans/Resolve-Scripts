@@ -78,6 +78,48 @@ export async function uploadCaption(id: string, data: unknown): Promise<{ ok: bo
   return res.json();
 }
 
+export async function createProjectExport(
+  id: string,
+  data: {
+    prefix: string;
+    width: number;
+    height: number;
+    fps: number;
+    totalFrames: number;
+    layers: Record<string, boolean>;
+  },
+): Promise<{ ok: boolean; exportId: string; folder: string }> {
+  const res = await fetch(`${BASE}/projects/${id}/exports`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error('Failed to create project export folder');
+  return res.json();
+}
+
+export async function uploadExportFrame(
+  id: string,
+  exportId: string,
+  filename: string,
+  blob: Blob,
+): Promise<void> {
+  const form = new FormData();
+  form.append('filename', filename);
+  form.append('frame', blob, filename);
+  const res = await fetch(`${BASE}/projects/${id}/exports/${exportId}/frame`, {
+    method: 'POST',
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Failed to save ${filename}`);
+}
+
+export async function finishProjectExport(id: string, exportId: string): Promise<{ ok: boolean; folder: string }> {
+  const res = await fetch(`${BASE}/projects/${id}/exports/${exportId}/finish`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to finish project export');
+  return res.json();
+}
+
 export function getVideoUrl(id: string): string {
   return `${BASE}/projects/${id}/video`;
 }

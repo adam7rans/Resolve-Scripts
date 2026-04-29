@@ -34,12 +34,18 @@ function safeFilename(name: string): string {
   const base = path.basename(name, ext).trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'video';
   return `${base}${ext || '.mp4'}`;
 }
+function safePngFilename(name: string): string {
+  const ext = path.extname(name).toLowerCase();
+  const base = path.basename(name, ext).trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'frame';
+  return `${base}.png`;
+}
 function uniqueSlug(base: string): string {
   let s = base, n = 1;
   while (fs.existsSync(path.join(PROJECTS_DIR, s))) s = `${base}-${n++}`;
   return s;
 }
 function projectDir(id: string) { return path.join(PROJECTS_DIR, id); }
+function exportDir(id: string, exportId: string) { return path.join(projectDir(id), 'exports', exportId); }
 function readProject(id: string): any | null {
   const p = path.join(projectDir(id), PROJECT_FILE);
   return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf-8')) : null;
@@ -48,8 +54,8 @@ function writeProject(id: string, data: any) {
   fs.writeFileSync(path.join(projectDir(id), PROJECT_FILE), JSON.stringify(data, null, 2));
 }
 const SETTINGS_KEYS = new Set([
-  'background', 'backgroundDither', 'video', 'captionMode', 'captionStyle', 'layers', 'guides',
-  'cropToGuide', 'exportBackground', 'exportVideo', 'ui',
+  'background', 'backgroundDither', 'video', 'captionMode', 'captionStyle', 'layers',
+  'guides', 'activeGuide', 'cropToGuide', 'exportBackground', 'exportVideo', 'ui',
 ]);
 function readSettings(id: string, project?: any): any {
   const p = path.join(projectDir(id), SETTINGS_FILE);
@@ -202,6 +208,65 @@ app.put('/api/projects/:id/caption', (req, res) => {
   writeProject(id, proj);
   emit(id, { type: 'caption_saved', message: 'Caption JSON saved to project folder' });
   res.json({ ok: true, filename: CAPTION_FILE });
+});
+
+// Create and write browser-rendered PNG sequence exports into the project folder.
+app.post('/api/projects/:id/exports', (req, res) => {
+  const id = req.params.id;
+  const proj = readProject(id);
+  if (!proj) return void res.status(404).json({ error: 'Not found' });
+
+  const prefix = slugify(String(req.body?.prefix || 'export'));
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const exportId = slugify(`${stamp}-${prefix}`);
+  const dir = exportDir(id, exportId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+    status: 'exporting',
+    createdAt: new Date().toISOString(),
+    ...req.body,
+  }, null, 2));
+  res.json({ ok: true, exportId, folder: `projects/${id}/exports/${exportId}` });
+});
+
+const frameUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 128 * 1024 * 1024 },
+});
+
+app.post('/api/projects/:id/exports/:exportId/frame', frameUpload.single('frame'), (req, res) => {
+  const id = req.params.id;
+  const proj = readProject(id);
+  if (!proj || !req.file) return void res.status(400).json({ error: 'Bad request' });
+
+  const exportId = slugify(req.params.exportId);
+  const dir = exportDir(id, exportId);
+  if (!fs.existsSync(dir)) return void res.status(404).json({ error: 'Export folder not found' });
+
+  const filename = safePngFilename(String(req.body?.filename || req.file.originalname || 'frame.png'));
+  fs.writeFileSync(path.join(dir, filename), req.file.buffer);
+  res.json({ ok: true, filename });
+});
+
+app.post('/api/projects/:id/exports/:exportId/finish', (req, res) => {
+  const id = req.params.id;
+  const proj = readProject(id);
+  if (!proj) return void res.status(404).json({ error: 'Not found' });
+
+  const exportId = slugify(req.params.exportId);
+  const dir = exportDir(id, exportId);
+  if (!fs.existsSync(dir)) return void res.status(404).json({ error: 'Export folder not found' });
+
+  const manifestPath = path.join(dir, 'manifest.json');
+  const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) : {};
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    ...manifest,
+    status: 'complete',
+    completedAt: new Date().toISOString(),
+  }, null, 2));
+  proj.updatedAt = new Date().toISOString();
+  writeProject(id, proj);
+  res.json({ ok: true, folder: `projects/${id}/exports/${exportId}` });
 });
 
 // Serve video with range-request support for scrubbing

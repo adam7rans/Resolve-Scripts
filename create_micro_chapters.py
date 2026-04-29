@@ -171,10 +171,13 @@ def _insert_text_plus(timeline):
             continue
         try:
             clip = fn(arg)
-        except Exception:
+        except Exception as e:
+            print(f"      {fn.__name__}({arg!r}): exception {e}")
             clip = None
         if clip:
             return clip
+        else:
+            print(f"      {fn.__name__}({arg!r}): returned {clip!r}")
     return None
 
 

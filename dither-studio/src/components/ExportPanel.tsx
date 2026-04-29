@@ -1,23 +1,24 @@
 import React, { useState } from 'react';
 import { Section, Slider, Row } from './Controls';
 import type { ExportParams } from '../lib/types';
-import { isFsAccessSupported, pickExportDirectory } from '../lib/exporter';
 
 export interface ExportPanelProps {
   params: ExportParams;
   onChange: (p: ExportParams) => void;
-  onExport: (dir: FileSystemDirectoryHandle, onProgress: (done: number, total: number) => void) => Promise<void>;
+  onExport: (onProgress: (done: number, total: number) => void) => Promise<string | void>;
   /** if provided, locks duration to this (e.g. video length) */
   lockedDuration?: number;
   exportLabel?: string;
+  layerSummary?: string;
 }
 
 export const ExportPanel: React.FC<ExportPanelProps> = ({
-  params, onChange, onExport, lockedDuration, exportLabel = 'Export PNG sequence',
+  params, onChange, onExport, lockedDuration, exportLabel = 'Export PNG sequence', layerSummary,
 }) => {
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [folder, setFolder] = useState<string | null>(null);
 
   const set = (patch: Partial<ExportParams>) => onChange({ ...params, ...patch });
 
@@ -26,15 +27,12 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
 
   const handleExport = async () => {
     setError(null);
-    if (!isFsAccessSupported()) {
-      setError('File System Access API not supported. Use Chrome/Edge/Brave.');
-      return;
-    }
+    setFolder(null);
     try {
-      const dir = await pickExportDirectory();
       setExporting(true);
       setProgress({ done: 0, total: totalFrames });
-      await onExport(dir, (done, total) => setProgress({ done, total }));
+      const exportFolder = await onExport((done, total) => setProgress({ done, total }));
+      if (exportFolder) setFolder(exportFolder);
     } catch (e: any) {
       if (e?.name !== 'AbortError') setError(String(e?.message ?? e));
     } finally {
@@ -64,6 +62,11 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
         {totalFrames} frames @ {params.width}×{params.height}
         {lockedDuration !== undefined ? ` (locked to video: ${dur.toFixed(2)}s)` : ''}
       </div>
+      {layerSummary && (
+        <div style={{ marginTop: 4, color: '#777', lineHeight: 1.4 }}>
+          Layers: {layerSummary}
+        </div>
+      )}
       <button
         onClick={handleExport}
         disabled={exporting}
@@ -75,8 +78,9 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
         {exporting ? `Exporting ${progress?.done ?? 0} / ${progress?.total ?? totalFrames}` : exportLabel}
       </button>
       {error && <div style={{ color: '#ff6b6b', marginTop: 6 }}>{error}</div>}
+      {folder && <div style={{ color: '#30d158', marginTop: 6 }}>Saved to {folder}</div>}
       <div style={{ color: '#666', marginTop: 6, lineHeight: 1.5 }}>
-        Pick an empty folder. Files: <code>{params.filenamePrefix}_00001.png</code> …<br />
+        Files: <code>{params.filenamePrefix}_00001.png</code> … inside this project folder.<br />
         In Resolve: Media Pool → Import → enable "Image Sequence" → select first frame.
       </div>
     </Section>

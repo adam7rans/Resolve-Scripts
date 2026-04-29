@@ -83,6 +83,8 @@ export interface CaptionStyle {
   lineHeight: number;
   horizontalPosition: number;
   verticalPosition: number;
+  /** Max width of line-mode caption box, as a percentage of the frame width (0-100). */
+  lineMaxWidth: number;
   textAlign: 'left' | 'center' | 'right';
   underlineEnabled: boolean;
   wordHighlightEnabled: boolean;
@@ -171,6 +173,7 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   lineHeight: 1.4,
   horizontalPosition: 50,
   verticalPosition: 72,
+  lineMaxWidth: 92,
   textAlign: 'center',
   underlineEnabled: true,
   wordHighlightEnabled: true,

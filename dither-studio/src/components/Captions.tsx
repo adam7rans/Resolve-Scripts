@@ -88,8 +88,9 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
   }, [activeWord?.text, mode]);
 
   // shared style for both modes — overlay centered on the preview
-  const boxWidth = 92;
-  const boxLeft = ((100 - boxWidth) * captionStyle.horizontalPosition) / 100;
+  // word mode keeps the full width (words are short); line mode uses the configurable max width.
+  const wordBoxWidth = 92;
+  const lineBoxWidth = Math.max(1, Math.min(100, captionStyle.lineMaxWidth));
   const overlayStyle: React.CSSProperties = {
     position: 'absolute',
     left: frame.x,
@@ -100,13 +101,16 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
     pointerEvents: 'none',
     fontFamily: captionStyle.fontFamily,
   };
-  const captionBoxStyle: React.CSSProperties = {
-    position: 'absolute',
-    left: `${boxLeft}%`,
-    top: `${captionStyle.verticalPosition}%`,
-    width: `${boxWidth}%`,
-    transform: 'translateY(-50%)',
-    textAlign: captionStyle.textAlign,
+  const buildBoxStyle = (boxWidth: number): React.CSSProperties => {
+    const boxLeft = ((100 - boxWidth) * captionStyle.horizontalPosition) / 100;
+    return {
+      position: 'absolute',
+      left: `${boxLeft}%`,
+      top: `${captionStyle.verticalPosition}%`,
+      width: `${boxWidth}%`,
+      transform: 'translateY(-50%)',
+      textAlign: captionStyle.textAlign,
+    };
   };
 
   if (mode === 'word') {
@@ -114,7 +118,7 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
       <div style={overlayStyle}>
         <span
           style={{
-            ...captionBoxStyle,
+            ...buildBoxStyle(wordBoxWidth),
             display: 'block',
             fontSize: captionStyle.wordFontSize,
             fontWeight: captionStyle.fontWeight,
@@ -139,7 +143,7 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
     <div style={overlayStyle}>
       <div
         style={{
-          ...captionBoxStyle,
+          ...buildBoxStyle(lineBoxWidth),
           fontSize: captionStyle.lineFontSize,
           fontWeight: captionStyle.fontWeight,
           letterSpacing: `${captionStyle.letterSpacing}em`,
