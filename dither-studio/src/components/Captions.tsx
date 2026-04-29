@@ -7,23 +7,24 @@ import {
   splitSentences, type CaptionMode, type CaptionSentence,
   type TranscriptData, type TranscriptWord,
 } from '../lib/transcript';
+import { DEFAULT_CAPTION_STYLE, type CaptionStyle } from '../lib/types';
 
 interface CaptionsProps {
   transcript: TranscriptData;
   mode: CaptionMode;
+  style?: CaptionStyle;
+  frame: { x: number; y: number; w: number; h: number };
   /** something whose .currentTime is read each frame (in seconds) */
   timeSourceRef: React.MutableRefObject<HTMLVideoElement | null>;
 }
 
-const TEXT = '#ffffff';
-const TEXT_DIM = 'rgba(255,255,255,0.5)';
-
 const isWordActive = (w: TranscriptWord, ms: number) =>
   ms >= (w.start ?? 0) && ms <= (w.end ?? w.start ?? 0);
 
-export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, timeSourceRef }) => {
+export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DEFAULT_CAPTION_STYLE, frame, timeSourceRef }) => {
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const rafRef = useRef<number | null>(null);
+  const captionStyle = { ...DEFAULT_CAPTION_STYLE, ...style };
 
   // poll currentTime every frame
   useEffect(() => {
@@ -49,7 +50,13 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, timeSource
 
   const activeWord = useMemo(() => {
     if (!activeUtterance?.words) return null;
-    return activeUtterance.words.find((w) => isWordActive(w, currentTimeMs)) ?? null;
+    const words = activeUtterance.words;
+    const exact = words.find((w) => isWordActive(w, currentTimeMs));
+    if (exact) return exact;
+    const previous = [...words].reverse().find((w) => currentTimeMs >= (w.start ?? 0));
+    if (!previous) return null;
+    const utteranceEnd = activeUtterance.end ?? previous.end ?? previous.start ?? 0;
+    return currentTimeMs <= utteranceEnd + 1000 ? previous : null;
   }, [activeUtterance, currentTimeMs]);
 
   const activeSentence = useMemo(() => {
@@ -81,13 +88,25 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, timeSource
   }, [activeWord?.text, mode]);
 
   // shared style for both modes — overlay centered on the preview
+  const boxWidth = 92;
+  const boxLeft = ((100 - boxWidth) * captionStyle.horizontalPosition) / 100;
   const overlayStyle: React.CSSProperties = {
     position: 'absolute',
-    left: 0, right: 0, bottom: '8%',
-    display: 'flex',
-    justifyContent: 'center',
+    left: frame.x,
+    top: frame.y,
+    width: frame.w,
+    height: frame.h,
+    overflow: 'visible',
     pointerEvents: 'none',
-    fontFamily: 'inherit',
+    fontFamily: captionStyle.fontFamily,
+  };
+  const captionBoxStyle: React.CSSProperties = {
+    position: 'absolute',
+    left: `${boxLeft}%`,
+    top: `${captionStyle.verticalPosition}%`,
+    width: `${boxWidth}%`,
+    transform: 'translateY(-50%)',
+    textAlign: captionStyle.textAlign,
   };
 
   if (mode === 'word') {
@@ -95,13 +114,15 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, timeSource
       <div style={overlayStyle}>
         <span
           style={{
-            fontSize: 64,
-            fontWeight: 700,
-            letterSpacing: '0.06em',
-            color: TEXT,
+            ...captionBoxStyle,
+            display: 'block',
+            fontSize: captionStyle.wordFontSize,
+            fontWeight: captionStyle.fontWeight,
+            letterSpacing: `${captionStyle.letterSpacing}em`,
+            color: captionStyle.color,
             textShadow: '0 2px 16px rgba(0,0,0,0.7)',
-            opacity: wordVisible ? 1 : 0,
-            transition: 'opacity 200ms ease',
+            opacity: captionStyle.wordHighlightEnabled ? (wordVisible ? 1 : 0) : 1,
+            transition: captionStyle.wordHighlightEnabled ? 'opacity 200ms ease, color 200ms ease' : 'none',
           }}
         >
           {wordText}
@@ -118,11 +139,12 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, timeSource
     <div style={overlayStyle}>
       <div
         style={{
-          maxWidth: '70%',
-          textAlign: 'center',
-          fontSize: 28,
-          lineHeight: 1.4,
-          color: TEXT,
+          ...captionBoxStyle,
+          fontSize: captionStyle.lineFontSize,
+          fontWeight: captionStyle.fontWeight,
+          letterSpacing: `${captionStyle.letterSpacing}em`,
+          lineHeight: captionStyle.lineHeight,
+          color: captionStyle.color,
           textShadow: '0 2px 12px rgba(0,0,0,0.7)',
         }}
       >
@@ -136,13 +158,14 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, timeSource
                 ? Math.min(Math.max(currentTimeMs - wStart, 0), wDur)
                 : 0;
               const progress = active ? elapsed / wDur : 0;
+              const highlighted = active && captionStyle.wordHighlightEnabled;
               return (
                 <span
                   key={i}
                   style={{
-                    color: active ? TEXT : TEXT_DIM,
-                    backgroundImage: `linear-gradient(to right, ${TEXT}, ${TEXT})`,
-                    backgroundSize: active ? `${(progress * 100).toFixed(2)}% 2px` : '0% 2px',
+                    color: captionStyle.wordHighlightEnabled ? (highlighted ? captionStyle.color : captionStyle.dimColor) : captionStyle.color,
+                    backgroundImage: `linear-gradient(to right, ${captionStyle.color}, ${captionStyle.color})`,
+                    backgroundSize: active && captionStyle.underlineEnabled ? `${(progress * 100).toFixed(2)}% 2px` : '0% 2px',
                     backgroundPosition: '0 100%',
                     backgroundRepeat: 'no-repeat',
                     transition: 'color 200ms ease, background-size 100ms linear',

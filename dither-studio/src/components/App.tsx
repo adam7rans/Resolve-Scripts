@@ -3,11 +3,12 @@ import { BackgroundRenderer } from '../lib/BackgroundRenderer';
 import { VideoRenderer } from '../lib/VideoRenderer';
 import {
   DEFAULT_BACKGROUND, DEFAULT_DITHER, DEFAULT_VIDEO, DEFAULT_EXPORT,
-  type BackgroundParams, type DitherParams, type VideoShaderParams, type ExportParams,
+  DEFAULT_CAPTION_STYLE,
+  type BackgroundParams, type DitherParams, type VideoShaderParams, type ExportParams, type CaptionStyle,
 } from '../lib/types';
 import { PRESETS, VIDEO_PRESETS } from '../lib/presets';
 import { canvasToPngBlob, frameNumber, seekVideoTo, writePng } from '../lib/exporter';
-import { Section, Select } from './Controls';
+import { Section, Select, Slider, Toggle } from './Controls';
 import {
   BackgroundControls, DitherControls,
   VideoLevelsSection, VideoToneSection, VideoColorSection,
@@ -42,6 +43,18 @@ const GUIDES = [
   { key: '1080x1920', w: 1080, h: 1920, label: '1080×1920' },
 ] as const;
 type GuideKey = (typeof GUIDES)[number]['key'];
+const CAPTION_FONT_OPTIONS = [
+  { label: 'Source Code Pro', value: '"Source Code Pro", ui-monospace, "SF Mono", Menlo, Consolas, monospace' },
+  { label: 'System mono', value: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace' },
+  { label: 'System sans', value: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
+  { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
+  { label: 'Georgia', value: 'Georgia, serif' },
+  { label: 'Impact', value: 'Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif' },
+];
+
+function isVerticalVideo(info: { w: number; h: number } | null) {
+  return !!info && info.h > info.w;
+}
 
 function fitRect(pw: number, ph: number, gw: number, gh: number) {
   if (pw <= 0 || ph <= 0) return { x: 0, y: 0, w: 0, h: 0 };
@@ -49,6 +62,25 @@ function fitRect(pw: number, ph: number, gw: number, gh: number) {
   const w = gw * scale;
   const h = gh * scale;
   return { x: (pw - w) / 2, y: (ph - h) / 2, w, h };
+}
+
+function guideRectInVideoFrame(
+  frame: { x: number; y: number; w: number; h: number },
+  video: { w: number; h: number } | null,
+  guide: { w: number; h: number },
+) {
+  if (!video) return fitRect(frame.w, frame.h, guide.w, guide.h);
+  const scale = video.h > video.w
+    ? frame.w / video.w
+    : Math.min(frame.w / guide.w, frame.h / guide.h);
+  const w = guide.w * scale;
+  const h = guide.h * scale;
+  return {
+    x: frame.x + (frame.w - w) / 2,
+    y: frame.y + (frame.h - h) / 2,
+    w,
+    h,
+  };
 }
 
 const LayerToggle: React.FC<{ label: string; on: boolean; onClick: () => void }> = ({ label, on, onClick }) => (
@@ -110,6 +142,39 @@ const ProjectStatusPanel: React.FC<{ project: ProjectMeta | undefined; status: P
     </div>
   );
 };
+const CaptionFontControls: React.FC<{ value: CaptionStyle; onChange: (v: CaptionStyle) => void }> = ({ value, onChange }) => {
+  const set = (patch: Partial<CaptionStyle>) => onChange({ ...value, ...patch });
+  return (
+    <Section title="Caption font">
+      <Select
+        label="family"
+        value={value.fontFamily}
+        options={CAPTION_FONT_OPTIONS}
+        onChange={(fontFamily) => set({ fontFamily })}
+      />
+      <Slider label="line size" value={value.lineFontSize} min={12} max={96} step={1} onChange={(v) => set({ lineFontSize: Math.round(v) })} />
+      <Slider label="word size" value={value.wordFontSize} min={16} max={160} step={1} onChange={(v) => set({ wordFontSize: Math.round(v) })} />
+      <Slider label="weight" value={value.fontWeight} min={300} max={900} step={100} onChange={(v) => set({ fontWeight: Math.round(v / 100) * 100 })} />
+      <Slider label="tracking" value={value.letterSpacing} min={0} max={0.2} step={0.005} onChange={(v) => set({ letterSpacing: v })} />
+      <Slider label="line height" value={value.lineHeight} min={0.9} max={2.2} step={0.05} onChange={(v) => set({ lineHeight: v })} />
+      <Slider label="horizontal pos" value={value.horizontalPosition} min={0} max={100} step={1} onChange={(v) => set({ horizontalPosition: Math.round(v) })} />
+      <Slider label="vertical pos" value={value.verticalPosition} min={0} max={100} step={1} onChange={(v) => set({ verticalPosition: Math.round(v) })} />
+      <Select
+        label="justify"
+        value={value.textAlign}
+        options={[
+          { label: 'left', value: 'left' },
+          { label: 'center', value: 'center' },
+          { label: 'right', value: 'right' },
+        ]}
+        onChange={(textAlign) => set({ textAlign: textAlign as CaptionStyle['textAlign'] })}
+      />
+      <Toggle label="underline anim" value={value.underlineEnabled} onChange={(underlineEnabled) => set({ underlineEnabled })} />
+      <Toggle label="word highlight" value={value.wordHighlightEnabled} onChange={(wordHighlightEnabled) => set({ wordHighlightEnabled })} />
+    </Section>
+  );
+};
+
 
 export const App: React.FC = () => {
   // ---------- shared state ----------
@@ -127,6 +192,7 @@ export const App: React.FC = () => {
   const [transcript, setTranscript] = useState<TranscriptData | null>(null);
   const [transcriptName, setTranscriptName] = useState<string | null>(null);
   const [captionMode, setCaptionMode] = useState<CaptionMode>('line');
+  const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
 
   // composition guides (overlay rectangles at fixed pixel sizes)
   const [guidesOn, setGuidesOn] = useState<Record<GuideKey, boolean>>({
@@ -181,6 +247,11 @@ export const App: React.FC = () => {
   const rafRef = useRef<number | null>(null);
   const startRef = useRef(performance.now());
   const exportingRef = useRef(false);
+  const previewFrame = videoInfo
+    ? fitRect(previewSize.w, previewSize.h, videoInfo.w, videoInfo.h)
+    : { x: 0, y: 0, w: previewSize.w, h: previewSize.h };
+  const verticalVideo = isVerticalVideo(videoInfo);
+  const availableGuides = verticalVideo ? GUIDES.filter((g) => g.key !== '1920x1080') : GUIDES;
 
   // ---------- init renderers once ----------
   useEffect(() => {
@@ -192,8 +263,6 @@ export const App: React.FC = () => {
       if (!el) return;
       const w = Math.max(1, el.clientWidth);
       const h = Math.max(1, el.clientHeight);
-      bgRendererRef.current?.setSize(w, h);
-      videoRendererRef.current?.setSize(w, h);
       setPreviewSize({ w, h });
     };
     fit();
@@ -241,6 +310,17 @@ export const App: React.FC = () => {
   useEffect(() => { bgRendererRef.current?.setDitherParams(bgDither); }, [bgDither]);
   useEffect(() => { videoRendererRef.current?.setParams(vid); }, [vid]);
   useEffect(() => { if (videoElRef.current) videoElRef.current.muted = muted; }, [muted]);
+  useEffect(() => {
+    const w = Math.max(1, Math.floor(previewFrame.w));
+    const h = Math.max(1, Math.floor(previewFrame.h));
+    bgRendererRef.current?.setSize(w, h);
+    videoRendererRef.current?.setSize(w, h);
+  }, [previewFrame.w, previewFrame.h]);
+  useEffect(() => {
+    if (!verticalVideo || !guidesOn['1920x1080']) return;
+    setGuidesOn((s) => ({ ...s, '1920x1080': false }));
+    setCropToGuide(false);
+  }, [verticalVideo, guidesOn]);
 
   // ---------- auto-save settings to active project ----------
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -250,12 +330,12 @@ export const App: React.FC = () => {
     saveTimerRef.current = setTimeout(() => {
       saveSettings(activeProjectId, {
         background: bg, backgroundDither: bgDither, video: vid,
-        captionMode, layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn },
+        captionMode, captionStyle, layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn },
         guides: guidesOn, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
         ui: { mainTab, bgSubTab, videoSubTab, exportSource, muted },
-      }).catch(() => {});
+      }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, captionMode, bgLayerOn, videoLayerOn, captionsLayerOn, guidesOn, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, exportSource, muted]);
+  }, [activeProjectId, bg, bgDither, vid, captionMode, captionStyle, bgLayerOn, videoLayerOn, captionsLayerOn, guidesOn, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, exportSource, muted]);
 
   // ---------- SSE stream for transcription progress ----------
   useEffect(() => {
@@ -264,8 +344,8 @@ export const App: React.FC = () => {
     const close = openEventStream(activeProjectId, (event) => {
       const statusKind: ProjectTaskStatus['kind'] =
         event.type === 'done' || event.type === 'caption_saved' ? 'success' :
-        event.type === 'error' ? 'error' :
-        event.type === 'video_saved' || event.type === 'audio_extracted' ? 'success' : 'progress';
+          event.type === 'error' ? 'error' :
+            event.type === 'video_saved' || event.type === 'audio_extracted' ? 'success' : 'progress';
       setProjectStatus({
         kind: statusKind,
         message: event.message,
@@ -293,7 +373,7 @@ export const App: React.FC = () => {
         const pid = activeProjectIdRef.current;
         if (pid) getTranscript(pid).then(data => {
           if (data) {
-            try { setTranscript(parseTranscript(data)); setTranscriptName('caption.json'); } catch {}
+            try { setTranscript(parseTranscript(data)); setTranscriptName('caption.json'); } catch { }
           }
         });
         // refresh project list
@@ -334,6 +414,7 @@ export const App: React.FC = () => {
       setVideoLayerOn(true);
       setCaptionsLayerOn(true);
       setCaptionMode('line');
+      setCaptionStyle(DEFAULT_CAPTION_STYLE);
       setMuted(false);
       setVideoInfo(null);
       setTranscript(null);
@@ -362,6 +443,7 @@ export const App: React.FC = () => {
       if (proj.backgroundDither) setBgDither(proj.backgroundDither);
       if (proj.video) setVid(proj.video);
       if (proj.captionMode) setCaptionMode(proj.captionMode);
+      if (proj.captionStyle) setCaptionStyle({ ...DEFAULT_CAPTION_STYLE, ...proj.captionStyle });
       if (proj.ui) {
         if (proj.ui.mainTab) setMainTab(proj.ui.mainTab);
         if (proj.ui.bgSubTab) setBgSubTab(proj.ui.bgSubTab);
@@ -395,7 +477,7 @@ export const App: React.FC = () => {
       // load transcript if present
       if (proj.hasTranscript) {
         const data = await getTranscript(id);
-        if (data) try { setTranscript(parseTranscript(data)); setTranscriptName('caption.json'); } catch {}
+        if (data) try { setTranscript(parseTranscript(data)); setTranscriptName('caption.json'); } catch { }
       }
       setProjectStatus({
         kind: 'success',
@@ -500,10 +582,10 @@ export const App: React.FC = () => {
 
   // ---------- export ----------
   const fitPreviewBack = () => {
-    const el = previewWrapRef.current;
-    if (!el) return;
-    bgRendererRef.current?.setSize(el.clientWidth, el.clientHeight);
-    videoRendererRef.current?.setSize(el.clientWidth, el.clientHeight);
+    const w = Math.max(1, Math.floor(previewFrame.w));
+    const h = Math.max(1, Math.floor(previewFrame.h));
+    bgRendererRef.current?.setSize(w, h);
+    videoRendererRef.current?.setSize(w, h);
   };
 
   const exportBackground = async (
@@ -561,9 +643,12 @@ export const App: React.FC = () => {
 
   // ---------- layout ----------
   const activeProject = projects.find((p) => p.id === activeProjectId);
+  const frameStyle: React.CSSProperties = videoInfo
+    ? { position: 'absolute', left: previewFrame.x, top: previewFrame.y, width: previewFrame.w, height: previewFrame.h }
+    : { position: 'absolute', inset: 0, width: '100%', height: '100%' };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', height: '100%', gap: 0 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', height: '100vh', minHeight: 0, overflow: 'hidden', gap: 0 }}>
       {/* preview (left) — both layers stacked, toggles control visibility */}
       <div
         ref={previewWrapRef}
@@ -572,25 +657,28 @@ export const App: React.FC = () => {
           // checkerboard whenever video layer is on (so transparency is visible).
           // when bg layer is also on, the background covers it but the video
           // composites on top.
-          background: videoLayerOn
-            ? `repeating-conic-gradient(#1a1a1a 0 25%, #2a2a2a 0 50%) 50% / 20px 20px`
-            : '#000',
+          background: videoInfo
+            ? '#000'
+            : videoLayerOn
+              ? `repeating-conic-gradient(#1a1a1a 0 25%, #2a2a2a 0 50%) 50% / 20px 20px`
+              : '#000',
           overflow: 'hidden',
+          minHeight: 0,
         }}
       >
         <canvas
           ref={bgCanvasRef}
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: bgLayerOn ? 'block' : 'none' }}
+          style={{ ...frameStyle, display: bgLayerOn ? 'block' : 'none' }}
         />
         <canvas
           ref={videoCanvasRef}
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: videoLayerOn ? 'block' : 'none' }}
+          style={{ ...frameStyle, display: videoLayerOn ? 'block' : 'none' }}
         />
 
         {/* composition guides (outlines) */}
-        {GUIDES.map((g) => {
+        {availableGuides.map((g) => {
           if (!guidesOn[g.key]) return null;
-          const r = fitRect(previewSize.w, previewSize.h, g.w, g.h);
+          const r = guideRectInVideoFrame(previewFrame, videoInfo, g);
           return (
             <div
               key={g.key}
@@ -611,9 +699,9 @@ export const App: React.FC = () => {
 
         {/* crop mask: black-out everything outside the active guide */}
         {cropToGuide && (() => {
-          const active = GUIDES.find((g) => guidesOn[g.key]);
+          const active = availableGuides.find((g) => guidesOn[g.key]);
           if (!active) return null;
-          const r = fitRect(previewSize.w, previewSize.h, active.w, active.h);
+          const r = guideRectInVideoFrame(previewFrame, videoInfo, active);
           const mask = '#000';
           return (
             <>
@@ -627,7 +715,7 @@ export const App: React.FC = () => {
 
         {/* captions overlay */}
         {captionsLayerOn && transcript && (
-          <Captions transcript={transcript} mode={captionMode} timeSourceRef={videoElRef} />
+          <Captions transcript={transcript} mode={captionMode} style={captionStyle} frame={previewFrame} timeSourceRef={videoElRef} />
         )}
 
         {/* status toasts */}
@@ -651,7 +739,7 @@ export const App: React.FC = () => {
       </div>
 
       {/* right panel */}
-      <div style={{ borderLeft: '1px solid #1f1f1f', display: 'flex', flexDirection: 'column', minWidth: 0, background: '#0c0c0c' }}>
+      <div style={{ borderLeft: '1px solid #1f1f1f', display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, background: '#0c0c0c' }}>
         <ProjectBar
           projects={projects}
           activeId={activeProjectId}
@@ -695,7 +783,7 @@ export const App: React.FC = () => {
         {/* guides */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '8px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a', alignItems: 'center' }}>
           <span style={{ color: '#666', textTransform: 'uppercase', letterSpacing: 1, marginRight: 4 }}>Guides</span>
-          {GUIDES.map((g) => (
+          {availableGuides.map((g) => (
             <PillToggle
               key={g.key}
               label={g.label}
@@ -818,6 +906,7 @@ export const App: React.FC = () => {
                       </>
                     )}
                   </Section>
+                  <CaptionFontControls value={captionStyle} onChange={setCaptionStyle} />
                   <Section title="Preset">
                     <Select
                       label="load"

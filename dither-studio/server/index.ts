@@ -48,7 +48,7 @@ function writeProject(id: string, data: any) {
   fs.writeFileSync(path.join(projectDir(id), PROJECT_FILE), JSON.stringify(data, null, 2));
 }
 const SETTINGS_KEYS = new Set([
-  'background', 'backgroundDither', 'video', 'captionMode', 'layers', 'guides',
+  'background', 'backgroundDither', 'video', 'captionMode', 'captionStyle', 'layers', 'guides',
   'cropToGuide', 'exportBackground', 'exportVideo', 'ui',
 ]);
 function readSettings(id: string, project?: any): any {

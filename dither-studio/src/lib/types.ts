@@ -74,6 +74,22 @@ export interface ExportParams {
   startSecond: number;     // start time offset
 }
 
+export interface CaptionStyle {
+  fontFamily: string;
+  lineFontSize: number;
+  wordFontSize: number;
+  fontWeight: number;
+  letterSpacing: number;
+  lineHeight: number;
+  horizontalPosition: number;
+  verticalPosition: number;
+  textAlign: 'left' | 'center' | 'right';
+  underlineEnabled: boolean;
+  wordHighlightEnabled: boolean;
+  color: string;
+  dimColor: string;
+}
+
 // Defaults match the DARK_PRESET used by w3rk17 (src/lib/three-presets.ts)
 // so the live look is reproduced 1:1 on first load.
 export const DEFAULT_BACKGROUND: BackgroundParams = {
@@ -144,4 +160,20 @@ export const DEFAULT_EXPORT: ExportParams = {
   duration: 10,
   filenamePrefix: 'dither',
   startSecond: 0,
+};
+
+export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
+  fontFamily: '"Source Code Pro", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+  lineFontSize: 28,
+  wordFontSize: 64,
+  fontWeight: 700,
+  letterSpacing: 0.06,
+  lineHeight: 1.4,
+  horizontalPosition: 50,
+  verticalPosition: 72,
+  textAlign: 'center',
+  underlineEnabled: true,
+  wordHighlightEnabled: true,
+  color: '#ffffff',
+  dimColor: 'rgba(255,255,255,0.5)',
 };
