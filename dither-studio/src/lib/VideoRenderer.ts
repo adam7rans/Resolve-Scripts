@@ -69,7 +69,10 @@ export class VideoRenderer {
   setSize(width: number, height: number) {
     this.width = Math.max(1, Math.floor(width));
     this.height = Math.max(1, Math.floor(height));
-    this.renderer.setSize(this.width, this.height, true);
+    // updateStyle=false so we don't overwrite the canvas's CSS width/height —
+    // React's frameStyle controls the on-screen size; this only changes the
+    // backing-store resolution.
+    this.renderer.setSize(this.width, this.height, false);
     (this.material.uniforms.uResolution.value as { x: number; y: number }).x = this.width;
     (this.material.uniforms.uResolution.value as { x: number; y: number }).y = this.height;
   }

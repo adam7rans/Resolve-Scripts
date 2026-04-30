@@ -68,7 +68,10 @@ export class BackgroundRenderer {
   setSize(width: number, height: number) {
     this.width = Math.max(1, Math.floor(width));
     this.height = Math.max(1, Math.floor(height));
-    this.renderer.setSize(this.width, this.height, true);
+    // updateStyle=false so we don't overwrite the canvas's CSS width/height —
+    // React's frameStyle controls the on-screen size; this only changes the
+    // backing-store resolution.
+    this.renderer.setSize(this.width, this.height, false);
     this.rt.setSize(this.width, this.height);
     (this.material.uniforms.u_resolution.value as THREE.Vector2).set(this.width, this.height);
     this.dither.setSize(this.width, this.height);

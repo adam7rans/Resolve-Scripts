@@ -66,6 +66,19 @@ function fitRect(pw: number, ph: number, gw: number, gh: number) {
   return { x: (pw - w) / 2, y: (ph - h) / 2, w, h };
 }
 
+function clamp(v: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, v));
+}
+
+function resolveExportRange(params: ExportParams, totalDuration: number | null) {
+  const total = Math.max(0.01, totalDuration ?? (params.endSecond ?? params.duration ?? 10));
+  const minGap = 0.01;
+  const start = clamp(params.startSecond ?? 0, 0, Math.max(0, total - minGap));
+  const fallbackEnd = params.endSecond ?? Math.min(total, start + Math.max(minGap, params.duration || minGap));
+  const end = clamp(fallbackEnd, start + minGap, total);
+  return { start, end, total, duration: end - start };
+}
+
 function guideRectInVideoFrame(
   frame: { x: number; y: number; w: number; h: number },
   video: { w: number; h: number } | null,
@@ -212,6 +225,7 @@ export const App: React.FC = () => {
   const [vidExport, setVidExport] = useState<ExportParams>({ ...DEFAULT_EXPORT, filenamePrefix: 'talking' });
   const [videoInfo, setVideoInfo] = useState<{ name: string; duration: number; w: number; h: number } | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [playheadSecond, setPlayheadSecond] = useState(0);
   const [muted, setMuted] = useState(false);
 
   // ---------- project management ----------
@@ -298,6 +312,8 @@ export const App: React.FC = () => {
   const videoLayerOnRef = useRef(videoLayerOn);
   useEffect(() => { bgLayerOnRef.current = bgLayerOn; }, [bgLayerOn]);
   useEffect(() => { videoLayerOnRef.current = videoLayerOn; }, [videoLayerOn]);
+  const playheadRef = useRef(playheadSecond);
+  useEffect(() => { playheadRef.current = playheadSecond; }, [playheadSecond]);
 
   // push parameter updates
   useEffect(() => { bgRendererRef.current?.setParams(bg); }, [bg]);
@@ -315,6 +331,38 @@ export const App: React.FC = () => {
     setActiveGuide(null);
     setCropToGuide(false);
   }, [verticalVideo, activeGuide]);
+  useEffect(() => {
+    const v = videoElRef.current;
+    if (!v || !videoInfo) return;
+    const { start, end } = resolveExportRange(vidExport, videoInfo.duration);
+    const clamped = clamp(v.currentTime || 0, start, end);
+    if (Math.abs((v.currentTime || 0) - clamped) > 0.001) {
+      v.currentTime = clamped;
+    }
+    setPlayheadSecond(clamped);
+  }, [videoInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration]);
+  useEffect(() => {
+    const v = videoElRef.current;
+    if (!v || !videoInfo) return;
+    let raf: number | null = null;
+    const tick = () => {
+      const { end } = resolveExportRange(vidExport, videoInfo.duration);
+      const current = v.currentTime || 0;
+      if (!v.paused && current >= end) {
+        v.currentTime = end;
+        v.pause();
+        setPlaying(false);
+      }
+      if (Math.abs(current - playheadRef.current) > 0.02) {
+        setPlayheadSecond(current);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [videoInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration]);
 
   // ---------- auto-save settings to active project ----------
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -410,6 +458,7 @@ export const App: React.FC = () => {
       setCaptionStyle(DEFAULT_CAPTION_STYLE);
       setMuted(false);
       setVideoInfo(null);
+      setPlayheadSecond(0);
       setTranscript(null);
       setTranscriptName(null);
       setPlaying(false);
@@ -430,6 +479,7 @@ export const App: React.FC = () => {
       videoElRef.current = null;
       videoRendererRef.current?.setVideo(null);
       setVideoInfo(null);
+      setPlayheadSecond(0);
       setTranscript(null);
       setTranscriptName(null);
       if (proj.background) setBg(proj.background);
@@ -469,7 +519,18 @@ export const App: React.FC = () => {
         v.muted = false; v.volume = 1; v.playsInline = true; v.preload = 'auto';
         v.addEventListener('loadedmetadata', () => {
           setVideoInfo({ name: proj.videoFile || 'video', duration: v.duration, w: v.videoWidth, h: v.videoHeight });
-          setVidExport(p => ({ ...p, width: v.videoWidth, height: v.videoHeight, duration: v.duration }));
+          setVidExport((p) => {
+            const nextEnd = p.endSecond === undefined ? v.duration : Math.min(v.duration, p.endSecond);
+            const nextStart = Math.min(p.startSecond, Math.max(0, nextEnd - 0.01));
+            return {
+              ...p,
+              width: v.videoWidth,
+              height: v.videoHeight,
+              startSecond: nextStart,
+              endSecond: nextEnd,
+              duration: Math.max(0.01, nextEnd - nextStart),
+            };
+          });
           videoRendererRef.current?.setVideo(v);
           videoElRef.current = v;
           v.currentTime = 0;
@@ -501,6 +562,7 @@ export const App: React.FC = () => {
     if (videoBlobUrlRef.current) URL.revokeObjectURL(videoBlobUrlRef.current);
     setTranscript(null);
     setTranscriptName(null);
+    setPlayheadSecond(0);
     setProjectStatus({ kind: 'progress', message: 'Importing video into project folder', progress: 0, detail: `Folder: projects/${pid}` });
 
     // Show immediately in preview via blob URL
@@ -511,7 +573,18 @@ export const App: React.FC = () => {
     v.muted = false; v.volume = 1; v.playsInline = true; v.preload = 'auto';
     v.addEventListener('loadedmetadata', () => {
       setVideoInfo({ name: file.name, duration: v.duration, w: v.videoWidth, h: v.videoHeight });
-      setVidExport((p) => ({ ...p, width: v.videoWidth, height: v.videoHeight, duration: v.duration }));
+      setVidExport((p) => {
+        const nextEnd = p.endSecond === undefined ? v.duration : Math.min(v.duration, p.endSecond);
+        const nextStart = Math.min(p.startSecond, Math.max(0, nextEnd - 0.01));
+        return {
+          ...p,
+          width: v.videoWidth,
+          height: v.videoHeight,
+          startSecond: nextStart,
+          endSecond: nextEnd,
+          duration: Math.max(0.01, nextEnd - nextStart),
+        };
+      });
       videoRendererRef.current?.setVideo(v);
       videoElRef.current = v;
       v.currentTime = 0;
@@ -541,8 +614,38 @@ export const App: React.FC = () => {
   const togglePlay = () => {
     const v = videoElRef.current;
     if (!v) return;
-    if (v.paused) { v.play(); setPlaying(true); }
-    else { v.pause(); setPlaying(false); }
+    const { start, end } = resolveExportRange(vidExport, videoInfo?.duration ?? v.duration);
+    if (v.paused) {
+      const cur = v.currentTime || 0;
+      let target = clamp(cur, start, end);
+      if (cur >= end - 0.001 || cur < start) target = start;
+      setPlayheadSecond(target);
+      const startPlayback = () => {
+        const p = v.play();
+        if (p && typeof p.catch === 'function') p.catch(() => setPlaying(false));
+        setPlaying(true);
+      };
+      if (Math.abs((v.currentTime || 0) - target) > 0.001) {
+        const onSeeked = () => { v.removeEventListener('seeked', onSeeked); startPlayback(); };
+        v.addEventListener('seeked', onSeeked);
+        v.currentTime = target;
+      } else {
+        startPlayback();
+      }
+    } else {
+      v.pause();
+      setPlaying(false);
+    }
+  };
+  const togglePlayRef = useRef(togglePlay);
+  useEffect(() => { togglePlayRef.current = togglePlay; });
+  const handleSeekPlayhead = (second: number) => {
+    const v = videoElRef.current;
+    if (!v) return;
+    const { start, end } = resolveExportRange(vidExport, videoInfo?.duration ?? v.duration);
+    const target = clamp(second, start, end);
+    v.currentTime = target;
+    setPlayheadSecond(target);
   };
 
   // ---------- keyboard shortcuts: space = play/pause, m = mute/unmute ----------
@@ -560,7 +663,7 @@ export const App: React.FC = () => {
       if (e.code === 'Space') {
         if (!videoElRef.current) return;
         e.preventDefault();
-        togglePlay();
+        togglePlayRef.current();
       } else if (e.key === 'm' || e.key === 'M') {
         if (!videoElRef.current) return;
         e.preventDefault();
@@ -616,23 +719,30 @@ export const App: React.FC = () => {
   };
 
   const exportComposition = async (
-    onProgress: (done: number, total: number) => void
+    onProgress: (done: number, total: number) => void,
+    signal: AbortSignal,
   ) => {
     const projectId = activeProjectIdRef.current;
     if (!projectId) throw new Error('Create or select a project before exporting.');
     if (!bgLayerOn && !videoLayerOn && !captionsLayerOn) throw new Error('Turn on at least one layer before exporting.');
+    const throwIfAborted = () => {
+      if (signal.aborted) {
+        const err = new Error('Export cancelled');
+        err.name = 'AbortError';
+        throw err;
+      }
+    };
 
     const bgRenderer = bgRendererRef.current;
     const videoRenderer = videoRendererRef.current;
     const video = videoElRef.current;
     const params = videoInfo ? vidExport : bgExport;
+    const range = resolveExportRange(params, videoInfo?.duration ?? null);
     if (videoLayerOn && (!videoRenderer || !video)) throw new Error('Load a video before exporting the video layer.');
 
     const width = Math.max(1, Math.floor(params.width));
     const height = Math.max(1, Math.floor(params.height));
-    const duration = videoInfo
-      ? Math.max(0.01, Math.min(videoInfo.duration - params.startSecond, params.duration))
-      : params.duration;
+    const duration = range.duration;
     const total = Math.max(1, Math.ceil(duration * params.fps));
     const canvas = document.createElement('canvas');
     canvas.width = width;
@@ -659,7 +769,8 @@ export const App: React.FC = () => {
       updateToast(toastId, `Exporting to ${created.folder}`, 'progress');
 
       for (let i = 0; i < total; i++) {
-        const t = params.startSecond + i / params.fps;
+        throwIfAborted();
+        const t = range.start + i / params.fps;
         ctx.clearRect(0, 0, width, height);
 
         if (bgLayerOn && bgRenderer) {
@@ -670,6 +781,7 @@ export const App: React.FC = () => {
         if (videoLayerOn && videoRenderer && video) {
           if (t > video.duration) break;
           await seekVideoTo(video, t);
+          throwIfAborted();
           videoRenderer.renderFrame();
           ctx.drawImage(videoRenderer.renderer.domElement as HTMLCanvasElement, 0, 0, width, height);
         }
@@ -679,6 +791,7 @@ export const App: React.FC = () => {
         }
 
         const blob = await canvasToPngBlob(canvas);
+        throwIfAborted();
         await uploadExportFrame(projectId, created.exportId, `${params.filenamePrefix}_${frameNumber(i)}.png`, blob);
         onProgress(i + 1, total);
         if (i % 2 === 0) {
@@ -693,8 +806,13 @@ export const App: React.FC = () => {
       updateToast(toastId, `Export complete: ${finished.folder}`, 'success');
       return finished.folder;
     } catch (error: any) {
-      updateToast(toastId, `Export failed: ${error?.message ?? error}`, 'error');
-      setProjectStatus({ kind: 'error', message: `Export failed: ${error?.message ?? error}` });
+      if (error?.name === 'AbortError' || signal.aborted) {
+        updateToast(toastId, 'Export cancelled', 'info');
+        setProjectStatus({ kind: 'idle', message: 'Export cancelled', detail: `Folder: projects/${projectId}` });
+      } else {
+        updateToast(toastId, `Export failed: ${error?.message ?? error}`, 'error');
+        setProjectStatus({ kind: 'error', message: `Export failed: ${error?.message ?? error}` });
+      }
       throw error;
     } finally {
       fitPreviewBack();
@@ -1040,6 +1158,8 @@ export const App: React.FC = () => {
               onChange={setActiveExportParams}
               onExport={exportComposition}
               lockedDuration={videoInfo?.duration}
+              playheadSecond={videoInfo ? playheadSecond : undefined}
+              onSeekPlayhead={videoInfo ? handleSeekPlayhead : undefined}
               layerSummary={exportLayerSummary}
             />
           )}

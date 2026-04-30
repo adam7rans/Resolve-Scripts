@@ -48,23 +48,44 @@ export function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
 
 /**
  * Seek a video to a given time and wait until the frame is actually decoded.
- * Uses requestVideoFrameCallback when available for frame-accurate capture.
+ *
+ * Uses BOTH `requestVideoFrameCallback` and the `seeked` event (whichever
+ * fires first) plus a timeout fallback, because:
+ *  - `requestVideoFrameCallback` only fires when a *new* frame is rendered.
+ *    Setting `currentTime` to (approximately) the current value sometimes
+ *    decodes no new frame, so the callback never fires and the export hangs.
+ *  - `seeked` event is more reliable but slightly less frame-accurate.
+ *  - If the video is already at the target time, we resolve on the next RAF
+ *    instead of waiting for events that may never fire.
  */
 export function seekVideoTo(video: HTMLVideoElement, t: number): Promise<void> {
   return new Promise((resolve) => {
+    const epsilon = 0.001;
+
+    // Already at target → just wait one frame and resolve.
+    if (Math.abs(video.currentTime - t) < epsilon) {
+      requestAnimationFrame(() => resolve());
+      return;
+    }
+
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      video.removeEventListener('seeked', onSeeked);
+      clearTimeout(timeoutId);
+      resolve();
+    };
+    const onSeeked = () => requestAnimationFrame(finish);
+
+    video.addEventListener('seeked', onSeeked);
     const anyVid = video as any;
     if (typeof anyVid.requestVideoFrameCallback === 'function') {
-      const onFrame = () => resolve();
-      anyVid.requestVideoFrameCallback(onFrame);
-      video.currentTime = t;
-    } else {
-      const onSeeked = () => {
-        video.removeEventListener('seeked', onSeeked);
-        // small extra delay to be safe on Chromium
-        requestAnimationFrame(() => resolve());
-      };
-      video.addEventListener('seeked', onSeeked);
-      video.currentTime = t;
+      anyVid.requestVideoFrameCallback(() => finish());
     }
+    // Last-resort timeout so a single slow seek can't wedge the whole export.
+    const timeoutId = window.setTimeout(finish, 2000);
+
+    video.currentTime = t;
   });
 }

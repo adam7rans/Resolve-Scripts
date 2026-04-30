@@ -69,9 +69,10 @@ export interface ExportParams {
   width: number;
   height: number;
   fps: number;
-  duration: number;        // seconds (background) or unused (video uses video duration)
+  duration: number;        // seconds (background) — fallback when endSecond is absent
   filenamePrefix: string;
-  startSecond: number;     // start time offset
+  startSecond: number;     // start time offset (seconds)
+  endSecond?: number;      // end time (seconds) — when absent, uses startSecond + duration
 }
 
 export interface CaptionStyle {
@@ -162,6 +163,7 @@ export const DEFAULT_EXPORT: ExportParams = {
   duration: 10,
   filenamePrefix: 'dither',
   startSecond: 0,
+  endSecond: 10,
 };
 
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
