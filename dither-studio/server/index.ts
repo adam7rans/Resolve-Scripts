@@ -4,7 +4,7 @@ import cors from 'cors';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { runTranscriptionPipeline, type TranscribeEvent } from './transcribe.js';
+import { runTranscriptionPipeline, runAudioTranscriptionPipeline, type TranscribeEvent } from './transcribe.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECTS_DIR = path.resolve(__dirname, '../../projects');
@@ -34,6 +34,11 @@ function safeFilename(name: string): string {
   const base = path.basename(name, ext).trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'video';
   return `${base}${ext || '.mp4'}`;
 }
+function safeAudioFilename(name: string): string {
+  const ext = path.extname(name).toLowerCase();
+  const base = path.basename(name, ext).trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'audio';
+  return `${base}${ext || '.mp3'}`;
+}
 function safePngFilename(name: string): string {
   const ext = path.extname(name).toLowerCase();
   const base = path.basename(name, ext).trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'frame';
@@ -56,6 +61,7 @@ function writeProject(id: string, data: any) {
 const SETTINGS_KEYS = new Set([
   'background', 'backgroundDither', 'video', 'captionMode', 'captionStyle', 'layers',
   'guides', 'activeGuide', 'cropToGuide', 'exportBackground', 'exportVideo', 'ui',
+  'audioReactivity', 'mathFigure', 'exportAudio',
 ]);
 function readSettings(id: string, project?: any): any {
   const p = path.join(projectDir(id), SETTINGS_FILE);
@@ -100,7 +106,9 @@ function projectMeta(id: string) {
     name: proj.name || id,
     createdAt: proj.createdAt,
     updatedAt: proj.updatedAt,
+    mediaType: proj.mediaType || (proj.audioFile ? 'audio' : proj.videoFile ? 'video' : null),
     hasVideo: !!(proj.videoFile && fs.existsSync(path.join(projectDir(id), proj.videoFile))),
+    hasAudio: !!(proj.audioFile && fs.existsSync(path.join(projectDir(id), proj.audioFile))),
     hasTranscript: hasCaption(id, proj),
   };
 }
@@ -138,7 +146,9 @@ app.get('/api/projects/:id', (req, res) => {
   res.json({
     ...proj,
     ...readSettings(id, proj),
+    mediaType: proj.mediaType || (proj.audioFile ? 'audio' : proj.videoFile ? 'video' : null),
     hasVideo: !!(proj.videoFile && fs.existsSync(path.join(projectDir(id), proj.videoFile))),
+    hasAudio: !!(proj.audioFile && fs.existsSync(path.join(projectDir(id), proj.audioFile))),
     hasTranscript: hasCaption(id, proj),
   });
 });
@@ -172,8 +182,11 @@ app.post('/api/projects/:id/video', upload.single('video'), (req, res) => {
 
   proj.videoFile = req.file.filename;
   proj.originalVideoName = req.file.originalname;
+  proj.mediaType = 'video';
   proj.importedAt = new Date().toISOString();
   proj.updatedAt = proj.importedAt;
+  delete proj.audioFile;
+  delete proj.originalAudioName;
   delete proj.transcriptFile;
   delete proj.captionFile;
   writeProject(id, proj);
@@ -193,6 +206,87 @@ app.post('/api/projects/:id/video', upload.single('video'), (req, res) => {
   });
 
   res.json({ ok: true, filename: req.file.filename });
+});
+
+// Upload audio — save to project folder, then kick off audio-only transcription.
+const audioUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => {
+      const dir = projectDir(req.params.id);
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (_req, file, cb) => cb(null, safeAudioFilename(file.originalname)),
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 * 1024 },
+});
+
+app.post('/api/projects/:id/audio', audioUpload.single('audio'), (req, res) => {
+  const id = req.params.id;
+  const proj = readProject(id);
+  if (!proj || !req.file) return void res.status(400).json({ error: 'Bad request' });
+
+  proj.audioFile = req.file.filename;
+  proj.originalAudioName = req.file.originalname;
+  proj.mediaType = 'audio';
+  proj.importedAt = new Date().toISOString();
+  proj.updatedAt = proj.importedAt;
+  delete proj.videoFile;
+  delete proj.transcriptFile;
+  delete proj.captionFile;
+  writeProject(id, proj);
+  emit(id, { type: 'video_saved', message: 'Audio imported into project folder' });
+
+  runAudioTranscriptionPipeline(req.file.path, projectDir(id), (event) => {
+    emit(id, event);
+    if (event.type === 'done') {
+      const p = readProject(id);
+      if (p) {
+        p.captionFile = CAPTION_FILE;
+        p.updatedAt = new Date().toISOString();
+        writeProject(id, p);
+      }
+    }
+  });
+
+  res.json({ ok: true, filename: req.file.filename });
+});
+
+// Serve audio with range-request support
+app.get('/api/projects/:id/audio', (req, res) => {
+  const proj = readProject(req.params.id);
+  if (!proj?.audioFile) return void res.status(404).json({ error: 'No audio' });
+  const ap = path.join(projectDir(req.params.id), proj.audioFile);
+  if (!fs.existsSync(ap)) return void res.status(404).json({ error: 'File not found' });
+
+  const stat = fs.statSync(ap);
+  const total = stat.size;
+  const ext = path.extname(proj.audioFile).toLowerCase();
+  const mime =
+    ext === '.wav' ? 'audio/wav' :
+    ext === '.m4a' ? 'audio/mp4' :
+    ext === '.flac' ? 'audio/flac' :
+    ext === '.ogg' ? 'audio/ogg' :
+    ext === '.opus' ? 'audio/ogg' :
+    ext === '.aac' ? 'audio/aac' :
+    'audio/mpeg';
+  const range = req.headers.range;
+
+  if (range) {
+    const [s, e] = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(s, 10);
+    const end = e ? parseInt(e, 10) : total - 1;
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${total}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': end - start + 1,
+      'Content-Type': mime,
+    });
+    fs.createReadStream(ap, { start, end }).pipe(res);
+  } else {
+    res.writeHead(200, { 'Content-Length': total, 'Content-Type': mime, 'Accept-Ranges': 'bytes' });
+    fs.createReadStream(ap).pipe(res);
+  }
 });
 
 // Save a manually supplied caption/transcript JSON into the project folder.

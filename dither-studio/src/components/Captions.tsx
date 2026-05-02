@@ -15,7 +15,7 @@ interface CaptionsProps {
   style?: CaptionStyle;
   frame: { x: number; y: number; w: number; h: number };
   /** something whose .currentTime is read each frame (in seconds) */
-  timeSourceRef: React.MutableRefObject<HTMLVideoElement | null>;
+  timeSourceRef: React.MutableRefObject<HTMLMediaElement | null>;
 }
 
 const isWordActive = (w: TranscriptWord, ms: number) =>
@@ -163,23 +163,66 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
                 : 0;
               const progress = active ? elapsed / wDur : 0;
               const highlighted = active && captionStyle.wordHighlightEnabled;
+
+              // Resolve underline mode (with legacy boolean fallback)
+              const underlineMode =
+                captionStyle.underlineMode ??
+                (captionStyle.underlineEnabled === false ? 'off' : 'draw');
+
+              // Fade alpha for 'fade' mode: ramps in over FADE_MS at the
+              // start of the word, holds at 1, and ramps out over FADE_MS at
+              // the end. For very short words the peak is < 1 but it still
+              // pulses smoothly. FADE_MS = 0 → instant on/off.
+              const FADE_MS = Math.max(0, captionStyle.underlineFadeMs ?? 150);
+              const remaining = active ? Math.max(wEnd - currentTimeMs, 0) : 0;
+              const fadeAlpha = active
+                ? FADE_MS === 0
+                  ? 1
+                  : Math.max(0, Math.min(1, Math.min(elapsed, remaining) / FADE_MS))
+                : 0;
+
+              const drawWidth =
+                underlineMode === 'draw' && active ? `${(progress * 100).toFixed(2)}%`
+                : underlineMode === 'fade' && active ? '100%'
+                : '0%';
+              const drawOpacity = underlineMode === 'fade' ? fadeAlpha : 1;
+
               return (
                 <span
                   key={i}
                   style={{
+                    position: 'relative',
+                    display: 'inline-block',
                     color: captionStyle.wordHighlightEnabled ? (highlighted ? captionStyle.color : captionStyle.dimColor) : captionStyle.color,
-                    backgroundImage: `linear-gradient(to right, ${captionStyle.color}, ${captionStyle.color})`,
-                    backgroundSize: active && captionStyle.underlineEnabled ? `${(progress * 100).toFixed(2)}% 2px` : '0% 2px',
-                    backgroundPosition: '0 100%',
-                    backgroundRepeat: 'no-repeat',
-                    transition: 'color 200ms ease, background-size 100ms linear',
+                    transition: 'color 200ms ease',
                     paddingBottom: 2,
                   }}
                 >
-                  {w.text}{' '}
+                  {w.text}
+                  <span
+                    aria-hidden
+                    style={{
+                      position: 'absolute',
+                      left: 0,
+                      bottom: 0,
+                      height: 2,
+                      width: drawWidth,
+                      background: captionStyle.color,
+                      opacity: drawOpacity,
+                      transition:
+                        underlineMode === 'draw'
+                          ? 'width 100ms linear'
+                          : `opacity ${FADE_MS}ms ease`,
+                      pointerEvents: 'none',
+                    }}
+                  />
                 </span>
               );
-            })
+            }).reduce<React.ReactNode[]>((acc, el, idx) => {
+              if (idx > 0) acc.push(' ');
+              acc.push(el);
+              return acc;
+            }, [])
           : activeSentence.text}
       </div>
     </div>

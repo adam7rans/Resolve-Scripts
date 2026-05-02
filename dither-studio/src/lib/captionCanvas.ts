@@ -117,6 +117,8 @@ export function drawCaptionsToCanvas(
   applyCaptionFont(ctx, style.lineFontSize, style);
   const boxWidth = lineBoxWidth;
   const boxLeft = ((width - lineBoxWidth) * style.horizontalPosition) / 100;
+  // Underline fade window (ms). 0 → instant on/off, matches the React preview.
+  const FADE_MS = Math.max(0, style.underlineFadeMs ?? 150);
   const tokens = sentence.words?.length
     ? sentence.words.map((w) => {
         const active = isWordActive(w, timeMs);
@@ -124,14 +126,30 @@ export function drawCaptionsToCanvas(
         const end = w.end ?? start;
         const duration = Math.max(end - start, 1);
         const elapsed = active ? Math.min(Math.max(timeMs - start, 0), duration) : 0;
-        return { text: `${w.text} `, active, progress: active ? elapsed / duration : 0 };
+        const remaining = active ? Math.max(end - timeMs, 0) : 0;
+        const fadeAlpha = active
+          ? FADE_MS === 0
+            ? 1
+            : Math.max(0, Math.min(1, Math.min(elapsed, remaining) / FADE_MS))
+          : 0;
+        return {
+          text: `${w.text} `,
+          word: w.text,
+          active,
+          progress: active ? elapsed / duration : 0,
+          fadeAlpha,
+        };
       })
-    : sentence.text.split(/\s+/).filter(Boolean).map((text) => ({ text: `${text} ` }));
+    : sentence.text.split(/\s+/).filter(Boolean).map((text) => ({ text: `${text} `, word: text }));
 
   const lines = wrapTokens(ctx, tokens, boxWidth);
   const lineHeightPx = style.lineFontSize * style.lineHeight;
   const totalHeight = Math.max(style.lineFontSize, lines.length * lineHeightPx);
   let y = centerY - totalHeight / 2 + style.lineFontSize;
+
+  // Resolve underline mode (with legacy boolean fallback).
+  const underlineMode: 'off' | 'draw' | 'fade' =
+    style.underlineMode ?? (style.underlineEnabled === false ? 'off' : 'draw');
 
   for (const line of lines) {
     const lineWidth = line.reduce((sum, token) => sum + measure(ctx, token.text), 0);
@@ -142,12 +160,25 @@ export function drawCaptionsToCanvas(
         ? token.active ? style.color : style.dimColor
         : style.color;
       ctx.fillText(token.text, x, y);
-      if (token.active && style.underlineEnabled) {
-        ctx.save();
-        ctx.shadowColor = 'transparent';
-        ctx.fillStyle = style.color;
-        ctx.fillRect(x, y + 5, tokenWidth * (token.progress ?? 0), 2);
-        ctx.restore();
+
+      if (token.active && underlineMode !== 'off') {
+        // Underline only the word itself, not the trailing space — matches
+        // the React preview where the bar sits under each word.
+        const wordWidth = measure(ctx, (token as any).word ?? token.text.trimEnd());
+        const barWidth =
+          underlineMode === 'draw'
+            ? wordWidth * (token.progress ?? 0)
+            : wordWidth;
+        const alpha =
+          underlineMode === 'fade' ? ((token as any).fadeAlpha ?? 0) : 1;
+        if (barWidth > 0 && alpha > 0) {
+          ctx.save();
+          ctx.shadowColor = 'transparent';
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = style.color;
+          ctx.fillRect(x, y + 5, barWidth, 2);
+          ctx.restore();
+        }
       }
       x += tokenWidth;
     }

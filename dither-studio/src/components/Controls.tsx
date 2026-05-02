@@ -22,27 +22,40 @@ export const Slider: React.FC<{
   min: number;
   max: number;
   step?: number;
+  /** Optional tick marks rendered via <datalist>. Browsers draw small notches on the track. */
+  ticks?: number[];
   onChange: (v: number) => void;
-}> = ({ label, value, min, max, step = 0.01, onChange }) => (
-  <Row label={label}>
-    <input
-      type="range"
-      min={min}
-      max={max}
-      step={step}
-      value={value}
-      onChange={(e) => onChange(parseFloat(e.target.value))}
-      style={{ width: '100%' }}
-    />
-    <input
-      type="number"
-      step={step}
-      value={Number.isFinite(value) ? Number(value.toFixed(4)) : 0}
-      onChange={(e) => onChange(parseFloat(e.target.value))}
-      style={{ width: 60, background: '#0a0a0a', color: '#ddd', border: '1px solid #333', padding: '2px 4px' }}
-    />
-  </Row>
-);
+}> = ({ label, value, min, max, step = 0.01, ticks, onChange }) => {
+  const listId = React.useId();
+  return (
+    <Row label={label}>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        list={ticks && ticks.length ? listId : undefined}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        style={{ width: '100%' }}
+      />
+      {ticks && ticks.length ? (
+        <datalist id={listId}>
+          {ticks.map((t) => (
+            <option key={t} value={t} label={String(t)} />
+          ))}
+        </datalist>
+      ) : null}
+      <input
+        type="number"
+        step={step}
+        value={Number.isFinite(value) ? Number(value.toFixed(4)) : 0}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        style={{ width: 60, background: '#0a0a0a', color: '#ddd', border: '1px solid #333', padding: '2px 4px' }}
+      />
+    </Row>
+  );
+};
 
 export const Toggle: React.FC<{ label: string; value: boolean; onChange: (v: boolean) => void }> = ({ label, value, onChange }) => (
   <Row label={label}>

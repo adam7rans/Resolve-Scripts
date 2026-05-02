@@ -22,6 +22,7 @@ uniform float u_warp;
 uniform float u_contrast;
 uniform float u_bias;
 uniform float u_rotation; // radians
+uniform float u_brightness; // 1.0 = neutral; >1 brightens, <1 darkens
 
 // Hash / Value noise
 float hash(vec2 p) {
@@ -148,6 +149,7 @@ void main() {
   n = pow(n, u_contrast);
 
   vec3 col = mix(u_colorA, u_colorB, n);
+  col = clamp(col * u_brightness, 0.0, 1.0);
   gl_FragColor = vec4(col, 1.0);
 }
 `;

@@ -65,6 +65,20 @@ export interface BackgroundParams {
   colorB: string;
 }
 
+export interface AudioReactivityParams {
+  enabled: boolean;
+  /** smoothing factor — higher = more responsive (0..1) */
+  attack: number;
+  /** release factor — higher = decays faster (0..1) */
+  release: number;
+  /** master gain on all band signals */
+  gain: number;
+  /** how much RMS modulates background u_speed (0..1) */
+  modSpeed: number;
+  /** how much RMS modulates background brightness (0..2 multiplier delta) */
+  modBrightness: number;
+}
+
 export interface ExportParams {
   width: number;
   height: number;
@@ -87,7 +101,23 @@ export interface CaptionStyle {
   /** Max width of line-mode caption box, as a percentage of the frame width (0-100). */
   lineMaxWidth: number;
   textAlign: 'left' | 'center' | 'right';
-  underlineEnabled: boolean;
+  /**
+   * Underline animation under the active word in line mode.
+   *  - 'off'  : never draw the underline
+   *  - 'draw' : karaoke-style left-to-right wipe over the word's duration
+   *  - 'fade' : full-width underline that fades in/out (~150 ms each side)
+   *
+   * `underlineEnabled` is the legacy boolean kept only so old saved projects
+   * still load — the renderer prefers `underlineMode` when present.
+   */
+  underlineMode: 'off' | 'draw' | 'fade';
+  /** @deprecated use `underlineMode` instead */
+  underlineEnabled?: boolean;
+  /**
+   * Fade-in / fade-out duration (ms) used by the 'fade' underline mode.
+   * 0 = instant pop, 300 = slow ease.
+   */
+  underlineFadeMs: number;
   wordHighlightEnabled: boolean;
   color: string;
   dimColor: string;
@@ -166,6 +196,15 @@ export const DEFAULT_EXPORT: ExportParams = {
   endSecond: 10,
 };
 
+export const DEFAULT_AUDIO_REACTIVITY: AudioReactivityParams = {
+  enabled: true,
+  attack: 0.6,
+  release: 0.12,
+  gain: 1.0,
+  modSpeed: 0.6,
+  modBrightness: 0.6,
+};
+
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   fontFamily: '"Source Code Pro", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
   lineFontSize: 28,
@@ -177,7 +216,8 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   verticalPosition: 72,
   lineMaxWidth: 92,
   textAlign: 'center',
-  underlineEnabled: true,
+  underlineMode: 'draw',
+  underlineFadeMs: 150,
   wordHighlightEnabled: true,
   color: '#ffffff',
   dimColor: 'rgba(255,255,255,0.5)',

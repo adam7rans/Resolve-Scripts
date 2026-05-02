@@ -44,6 +44,7 @@ export class BackgroundRenderer {
         u_contrast: { value: params.contrast },
         u_bias: { value: params.bias },
         u_rotation: { value: (params.rotation * Math.PI) / 180.0 },
+        u_brightness: { value: 1.0 },
       },
       vertexShader: backgroundVertexShader,
       fragmentShader: backgroundFragmentShader,
@@ -95,6 +96,21 @@ export class BackgroundRenderer {
   setDitherParams(p: DitherParams) {
     this.ditherParams = { ...p };
     this.dither.setParams(this.ditherParams);
+  }
+
+  /**
+   * Apply per-frame audio modulation on top of the base parameters.
+   *  - `speed`      : additive offset to u_speed (scrolling speed of the noise)
+   *  - `brightness` : additive offset to the neutral 1.0 brightness multiplier
+   *                   applied to the final color (>0 brightens, <0 darkens)
+   * Pass zeros to leave the base values untouched. Called immediately before
+   * renderFrame() so this only affects the next draw.
+   */
+  setModulation(offsets: { speed: number; brightness: number }) {
+    const u = this.material.uniforms;
+    const p = this.params;
+    u.u_speed.value = p.speed + offsets.speed;
+    u.u_brightness.value = Math.max(0, 1.0 + offsets.brightness);
   }
 
   /** Draw a single frame at time t (seconds). */

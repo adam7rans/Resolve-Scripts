@@ -3,7 +3,9 @@ export interface ProjectMeta {
   name: string;
   createdAt: string;
   updatedAt?: string;
+  mediaType?: 'video' | 'audio' | null;
   hasVideo: boolean;
+  hasAudio?: boolean;
   hasTranscript: boolean;
 }
 
@@ -122,6 +124,34 @@ export async function finishProjectExport(id: string, exportId: string): Promise
 
 export function getVideoUrl(id: string): string {
   return `${BASE}/projects/${id}/video`;
+}
+
+export function getAudioUrl(id: string): string {
+  return `${BASE}/projects/${id}/audio`;
+}
+
+export async function uploadAudio(
+  id: string,
+  file: File,
+  onProgress?: (pct: number) => void,
+): Promise<{ ok: boolean; filename: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE}/projects/${id}/audio`);
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      });
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+      else reject(new Error(`Upload failed: ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error('Network error'));
+    const form = new FormData();
+    form.append('audio', file);
+    xhr.send(form);
+  });
 }
 
 export async function getTranscript(id: string): Promise<any | null> {

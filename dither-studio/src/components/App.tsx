@@ -1,15 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BackgroundRenderer } from '../lib/BackgroundRenderer';
 import { VideoRenderer } from '../lib/VideoRenderer';
+import { AudioSource, type AudioBands } from '../lib/AudioSource';
 import {
   DEFAULT_BACKGROUND, DEFAULT_DITHER, DEFAULT_VIDEO, DEFAULT_EXPORT,
-  DEFAULT_CAPTION_STYLE,
+  DEFAULT_CAPTION_STYLE, DEFAULT_AUDIO_REACTIVITY,
   type BackgroundParams, type DitherParams, type VideoShaderParams, type ExportParams, type CaptionStyle,
+  type AudioReactivityParams,
 } from '../lib/types';
 import { PRESETS, VIDEO_PRESETS } from '../lib/presets';
 import { canvasToPngBlob, frameNumber, seekVideoTo } from '../lib/exporter';
 import { drawCaptionsToCanvas } from '../lib/captionCanvas';
-import { Section, Select, Slider, Toggle } from './Controls';
+import { Section, Select, Slider, Toggle, ColorInput } from './Controls';
 import {
   BackgroundControls, DitherControls,
   VideoLevelsSection, VideoToneSection, VideoColorSection,
@@ -23,14 +25,22 @@ import { ProjectBar } from './ProjectBar';
 import { StatusToast, type Toast } from './StatusToast';
 import {
   listProjects, createProject, getProject, saveSettings,
-  uploadVideo, uploadCaption, getVideoUrl, getTranscript, openEventStream,
+  uploadVideo, uploadAudio, uploadCaption,
+  getVideoUrl, getAudioUrl, getTranscript, openEventStream,
   createProjectExport, uploadExportFrame, finishProjectExport,
   type ProjectMeta,
 } from '../lib/projectApi';
 
-type MainTab = 'background' | 'video' | 'export';
+type MainTab = 'background' | 'video' | 'reactivity' | 'export';
 type BgSubTab = 'noise' | 'dither';
 type VideoSubTab = 'levels' | 'tone' | 'color' | 'distortion' | 'dither';
+
+const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.aac'];
+function isAudioFile(file: File): boolean {
+  if (file.type && file.type.startsWith('audio/')) return true;
+  const lower = file.name.toLowerCase();
+  return AUDIO_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
 type ProjectTaskStatus = {
   kind: 'idle' | 'progress' | 'success' | 'error';
   message: string;
@@ -185,12 +195,88 @@ const CaptionFontControls: React.FC<{ value: CaptionStyle; onChange: (v: Caption
         ]}
         onChange={(textAlign) => set({ textAlign: textAlign as CaptionStyle['textAlign'] })}
       />
-      <Toggle label="underline anim" value={value.underlineEnabled} onChange={(underlineEnabled) => set({ underlineEnabled })} />
+      <Select
+        label="underline"
+        value={value.underlineMode ?? (value.underlineEnabled === false ? 'off' : 'draw')}
+        options={[
+          { label: 'off', value: 'off' },
+          { label: 'draw', value: 'draw' },
+          { label: 'fade', value: 'fade' },
+        ]}
+        onChange={(underlineMode) => set({ underlineMode: underlineMode as CaptionStyle['underlineMode'] })}
+      />
+      <Slider
+        label="fade ms"
+        value={value.underlineFadeMs ?? 150}
+        min={0}
+        max={300}
+        step={10}
+        ticks={[100, 200]}
+        onChange={(underlineFadeMs) => set({ underlineFadeMs: Math.round(underlineFadeMs) })}
+      />
       <Toggle label="word highlight" value={value.wordHighlightEnabled} onChange={(wordHighlightEnabled) => set({ wordHighlightEnabled })} />
     </Section>
   );
 };
 
+
+const ReactivityControls: React.FC<{
+  value: AudioReactivityParams;
+  onChange: (v: AudioReactivityParams) => void;
+  hasAudio: boolean;
+  bandsRef: React.MutableRefObject<AudioBands>;
+}> = ({ value, onChange, hasAudio, bandsRef }) => {
+  const set = (patch: Partial<AudioReactivityParams>) => onChange({ ...value, ...patch });
+
+  // Live band display — re-render at ~30fps so the user can see what the
+  // signal is doing while they tweak gains.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!hasAudio) return;
+    const id = setInterval(() => setTick((n) => n + 1), 33);
+    return () => clearInterval(id);
+  }, [hasAudio]);
+  const b = bandsRef.current;
+
+  return (
+    <>
+      {!hasAudio && (
+        <div style={{ color: '#aaa', fontSize: 11, padding: '4px 0 8px', borderBottom: '1px solid #1f1f1f', marginBottom: 8 }}>
+          Load an audio file (Video tab → Choose video or audio…) to enable audio-reactive modulation.
+        </div>
+      )}
+      <Section title="Live levels">
+        <BandMeter label="rms"  value={b.rms}  />
+        <BandMeter label="low"  value={b.low}  />
+        <BandMeter label="mid"  value={b.mid}  />
+        <BandMeter label="high" value={b.high} />
+      </Section>
+      <Section title="Reactivity">
+        <Toggle label="enabled" value={value.enabled} onChange={(enabled) => set({ enabled })} />
+        <Slider label="gain"    value={value.gain}    min={0} max={4} step={0.05} onChange={(gain) => set({ gain })} />
+        <Slider label="attack"  value={value.attack}  min={0} max={1} step={0.01} onChange={(attack) => set({ attack })} />
+        <Slider label="release" value={value.release} min={0} max={1} step={0.01} onChange={(release) => set({ release })} />
+      </Section>
+      <Section title="Background → audio">
+        <Slider label="speed (rms)"      value={value.modSpeed}      min={0} max={2} step={0.01} onChange={(modSpeed) => set({ modSpeed })} />
+        <Slider label="brightness (rms)" value={value.modBrightness} min={0} max={2} step={0.01} onChange={(modBrightness) => set({ modBrightness })} />
+      </Section>
+    </>
+  );
+};
+
+const BandMeter: React.FC<{ label: string; value: number }> = ({ label, value }) => {
+  const pct = Math.max(0, Math.min(1, value)) * 100;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+      <span style={{ width: 36, color: '#888', fontSize: 11 }}>{label}</span>
+      <div style={{ flex: 1, height: 8, background: '#1a1a1a', borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{ width: `${pct.toFixed(1)}%`, height: '100%', background: '#1f6feb', transition: 'width 60ms linear' }} />
+      </div>
+      <span style={{ width: 36, color: '#666', fontSize: 10, textAlign: 'right' }}>{value.toFixed(2)}</span>
+    </div>
+  );
+};
 
 export const App: React.FC = () => {
   // ---------- shared state ----------
@@ -203,6 +289,10 @@ export const App: React.FC = () => {
   const [bgLayerOn, setBgLayerOn] = useState(true);
   const [videoLayerOn, setVideoLayerOn] = useState(true);
   const [captionsLayerOn, setCaptionsLayerOn] = useState(true);
+
+  // audio-only mode state (parallel to videoInfo)
+  const [audioInfo, setAudioInfo] = useState<{ name: string; duration: number } | null>(null);
+  const [audioReactivity, setAudioReactivity] = useState<AudioReactivityParams>(DEFAULT_AUDIO_REACTIVITY);
 
   // transcript / captions
   const [transcript, setTranscript] = useState<TranscriptData | null>(null);
@@ -255,10 +345,15 @@ export const App: React.FC = () => {
   const bgRendererRef = useRef<BackgroundRenderer | null>(null);
   const videoRendererRef = useRef<VideoRenderer | null>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const audioSourceRef = useRef<AudioSource | null>(null);
+  const mediaElRef = useRef<HTMLMediaElement | null>(null);
   const videoBlobUrlRef = useRef<string | null>(null);
+  const audioBlobUrlRef = useRef<string | null>(null);
   const rafRef = useRef<number | null>(null);
   const startRef = useRef(performance.now());
   const exportingRef = useRef(false);
+  const lastBandsRef = useRef<AudioBands>({ rms: 0, low: 0, mid: 0, high: 0 });
   const previewFrame = videoInfo
     ? fitRect(previewSize.w, previewSize.h, videoInfo.w, videoInfo.h)
     : { x: 0, y: 0, w: previewSize.w, h: previewSize.h };
@@ -283,9 +378,27 @@ export const App: React.FC = () => {
 
     const loop = () => {
       if (!exportingRef.current) {
-        if (bgLayerOnRef.current) {
-          const t = (performance.now() - startRef.current) / 1000;
-          bgRendererRef.current?.renderFrame(t);
+        const t = (performance.now() - startRef.current) / 1000;
+
+        // Read audio bands once per frame (live AnalyserNode).
+        const audio = audioSourceRef.current;
+        const ar = audioReactivityRef.current;
+        const bands: AudioBands = audio && ar.enabled
+          ? audio.getBands(ar.attack, ar.release)
+          : { rms: 0, low: 0, mid: 0, high: 0 };
+        lastBandsRef.current = bands;
+        const g = ar.gain;
+
+        if (bgLayerOnRef.current && bgRendererRef.current) {
+          if (audio && ar.enabled) {
+            bgRendererRef.current.setModulation({
+              speed: bands.rms * g * ar.modSpeed * 1.5,
+              brightness: bands.rms * g * ar.modBrightness,
+            });
+          } else {
+            bgRendererRef.current.setModulation({ speed: 0, brightness: 0 });
+          }
+          bgRendererRef.current.renderFrame(t);
         }
         if (videoLayerOnRef.current) {
           videoRendererRef.current?.renderFrame();
@@ -299,10 +412,13 @@ export const App: React.FC = () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       ro.disconnect();
       if (videoBlobUrlRef.current) URL.revokeObjectURL(videoBlobUrlRef.current);
+      if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
+      audioSourceRef.current?.dispose();
       bgRendererRef.current?.dispose();
       videoRendererRef.current?.dispose();
       bgRendererRef.current = null;
       videoRendererRef.current = null;
+      audioSourceRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -310,8 +426,10 @@ export const App: React.FC = () => {
   // mirror state into refs the raf loop reads
   const bgLayerOnRef = useRef(bgLayerOn);
   const videoLayerOnRef = useRef(videoLayerOn);
+  const audioReactivityRef = useRef(audioReactivity);
   useEffect(() => { bgLayerOnRef.current = bgLayerOn; }, [bgLayerOn]);
   useEffect(() => { videoLayerOnRef.current = videoLayerOn; }, [videoLayerOn]);
+  useEffect(() => { audioReactivityRef.current = audioReactivity; }, [audioReactivity]);
   const playheadRef = useRef(playheadSecond);
   useEffect(() => { playheadRef.current = playheadSecond; }, [playheadSecond]);
 
@@ -319,7 +437,11 @@ export const App: React.FC = () => {
   useEffect(() => { bgRendererRef.current?.setParams(bg); }, [bg]);
   useEffect(() => { bgRendererRef.current?.setDitherParams(bgDither); }, [bgDither]);
   useEffect(() => { videoRendererRef.current?.setParams(vid); }, [vid]);
-  useEffect(() => { if (videoElRef.current) videoElRef.current.muted = muted; }, [muted]);
+  useEffect(() => {
+    if (videoElRef.current) videoElRef.current.muted = muted;
+    if (audioElRef.current) audioElRef.current.muted = muted;
+    audioSourceRef.current?.setMuted(muted);
+  }, [muted]);
   useEffect(() => {
     const w = Math.max(1, Math.floor(previewFrame.w));
     const h = Math.max(1, Math.floor(previewFrame.h));
@@ -332,21 +454,25 @@ export const App: React.FC = () => {
     setCropToGuide(false);
   }, [verticalVideo, activeGuide]);
   useEffect(() => {
-    const v = videoElRef.current;
-    if (!v || !videoInfo) return;
-    const { start, end } = resolveExportRange(vidExport, videoInfo.duration);
+    const v = mediaElRef.current;
+    const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? null;
+    const params = videoInfo ? vidExport : bgExport;
+    if (!v || !totalDuration) return;
+    const { start, end } = resolveExportRange(params, totalDuration);
     const clamped = clamp(v.currentTime || 0, start, end);
     if (Math.abs((v.currentTime || 0) - clamped) > 0.001) {
       v.currentTime = clamped;
     }
     setPlayheadSecond(clamped);
-  }, [videoInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration]);
+  }, [videoInfo, audioInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration, bgExport.startSecond, bgExport.endSecond, bgExport.duration]);
   useEffect(() => {
-    const v = videoElRef.current;
-    if (!v || !videoInfo) return;
+    const v = mediaElRef.current;
+    const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? null;
+    const params = videoInfo ? vidExport : bgExport;
+    if (!v || !totalDuration) return;
     let raf: number | null = null;
     const tick = () => {
-      const { end } = resolveExportRange(vidExport, videoInfo.duration);
+      const { end } = resolveExportRange(params, totalDuration);
       const current = v.currentTime || 0;
       if (!v.paused && current >= end) {
         v.currentTime = end;
@@ -362,7 +488,7 @@ export const App: React.FC = () => {
     return () => {
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [videoInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration]);
+  }, [videoInfo, audioInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration, bgExport.startSecond, bgExport.endSecond, bgExport.duration]);
 
   // ---------- auto-save settings to active project ----------
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -372,12 +498,14 @@ export const App: React.FC = () => {
     saveTimerRef.current = setTimeout(() => {
       saveSettings(activeProjectId, {
         background: bg, backgroundDither: bgDither, video: vid,
-        captionMode, captionStyle, layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn },
+        audioReactivity,
+        captionMode, captionStyle,
+        layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn },
         activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
         ui: { mainTab, bgSubTab, videoSubTab, muted },
       }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, captionMode, captionStyle, bgLayerOn, videoLayerOn, captionsLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, muted]);
+  }, [activeProjectId, bg, bgDither, vid, audioReactivity, captionMode, captionStyle, bgLayerOn, videoLayerOn, captionsLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, muted]);
 
   // ---------- SSE stream for transcription progress ----------
   useEffect(() => {
@@ -458,13 +586,19 @@ export const App: React.FC = () => {
       setCaptionStyle(DEFAULT_CAPTION_STYLE);
       setMuted(false);
       setVideoInfo(null);
+      setAudioInfo(null);
       setPlayheadSecond(0);
       setTranscript(null);
       setTranscriptName(null);
       setPlaying(false);
-      videoElRef.current?.pause();
+      mediaElRef.current?.pause();
       videoElRef.current = null;
+      audioElRef.current = null;
+      mediaElRef.current = null;
+      audioSourceRef.current?.dispose();
+      audioSourceRef.current = null;
       videoRendererRef.current?.setVideo(null);
+      setAudioReactivity(DEFAULT_AUDIO_REACTIVITY);
       setProjectStatus({ kind: 'success', message: `Project "${p.name}" created`, detail: `Folder: projects/${p.id}` });
       addToast(`Project "${p.name}" created`, 'success');
     } catch { addToast('Failed to create project', 'error'); }
@@ -475,16 +609,23 @@ export const App: React.FC = () => {
       const proj = await getProject(id);
       setActiveProjectId(id);
       setPlaying(false);
-      videoElRef.current?.pause();
+      mediaElRef.current?.pause();
       videoElRef.current = null;
+      audioElRef.current = null;
+      mediaElRef.current = null;
+      audioSourceRef.current?.dispose();
+      audioSourceRef.current = null;
       videoRendererRef.current?.setVideo(null);
       setVideoInfo(null);
+      setAudioInfo(null);
       setPlayheadSecond(0);
       setTranscript(null);
       setTranscriptName(null);
       if (proj.background) setBg(proj.background);
       if (proj.backgroundDither) setBgDither(proj.backgroundDither);
       if (proj.video) setVid(proj.video);
+      if (proj.audioReactivity) setAudioReactivity({ ...DEFAULT_AUDIO_REACTIVITY, ...proj.audioReactivity });
+      else setAudioReactivity(DEFAULT_AUDIO_REACTIVITY);
       if (proj.captionMode) setCaptionMode(proj.captionMode);
       if (proj.captionStyle) setCaptionStyle({ ...DEFAULT_CAPTION_STYLE, ...proj.captionStyle });
       if (proj.ui) {
@@ -533,7 +674,30 @@ export const App: React.FC = () => {
           });
           videoRendererRef.current?.setVideo(v);
           videoElRef.current = v;
+          mediaElRef.current = v;
           v.currentTime = 0;
+        });
+      }
+      // load audio if present
+      if (proj.hasAudio && !proj.hasVideo) {
+        const url = getAudioUrl(id);
+        const a = document.createElement('audio');
+        a.src = url;
+        a.crossOrigin = 'anonymous';
+        a.preload = 'auto';
+        a.addEventListener('loadedmetadata', () => {
+          const duration = a.duration;
+          setAudioInfo({ name: proj.audioFile || 'audio', duration });
+          setBgExport((p) => {
+            const nextEnd = p.endSecond === undefined ? duration : Math.min(duration, p.endSecond);
+            const nextStart = Math.min(p.startSecond, Math.max(0, nextEnd - 0.01));
+            return { ...p, startSecond: nextStart, endSecond: nextEnd, duration: Math.max(0.01, nextEnd - nextStart) };
+          });
+          audioElRef.current = a;
+          mediaElRef.current = a;
+          const src = new AudioSource({ element: a, url });
+          audioSourceRef.current = src;
+          a.currentTime = 0;
         });
       }
       // load transcript if present
@@ -550,16 +714,17 @@ export const App: React.FC = () => {
     } catch { addToast('Failed to load project', 'error'); }
   };
 
-  // ---------- video file load ----------
-  const loadFile = (file: File) => {
-    const pid = activeProjectIdRef.current;
-    if (!pid) {
-      setProjectStatus({ kind: 'error', message: 'Create or select a project before importing video' });
-      addToast('Create or select a project before importing video', 'error');
-      return;
-    }
-
+  // ---------- media file load (video or audio, auto-detected) ----------
+  const loadVideoFile = (file: File, pid: string) => {
     if (videoBlobUrlRef.current) URL.revokeObjectURL(videoBlobUrlRef.current);
+    if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
+    setPlaying(false);
+    mediaElRef.current?.pause();
+    audioSourceRef.current?.dispose();
+    audioSourceRef.current = null;
+    audioElRef.current = null;
+    mediaElRef.current = null;
+    setAudioInfo(null);
     setTranscript(null);
     setTranscriptName(null);
     setPlayheadSecond(0);
@@ -587,6 +752,7 @@ export const App: React.FC = () => {
       });
       videoRendererRef.current?.setVideo(v);
       videoElRef.current = v;
+      mediaElRef.current = v;
       v.currentTime = 0;
     });
     const uploadId = addToast('Importing video into project folder…', 'progress', true);
@@ -602,6 +768,76 @@ export const App: React.FC = () => {
       updateToast(uploadId, `Import failed: ${err.message}`, 'error');
     });
   };
+
+  const loadAudioFile = (file: File, pid: string) => {
+    if (videoBlobUrlRef.current) URL.revokeObjectURL(videoBlobUrlRef.current);
+    if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
+    setPlaying(false);
+    mediaElRef.current?.pause();
+    videoRendererRef.current?.setVideo(null);
+    videoElRef.current = null;
+    audioSourceRef.current?.dispose();
+    audioSourceRef.current = null;
+    audioElRef.current = null;
+    mediaElRef.current = null;
+    setVideoInfo(null);
+    setAudioInfo(null);
+    setTranscript(null);
+    setTranscriptName(null);
+    setPlayheadSecond(0);
+    setProjectStatus({ kind: 'progress', message: 'Importing audio into project folder', progress: 0, detail: `Folder: projects/${pid}` });
+
+    const url = URL.createObjectURL(file);
+    audioBlobUrlRef.current = url;
+    const a = document.createElement('audio');
+    a.src = url;
+    a.crossOrigin = 'anonymous';
+    a.preload = 'auto';
+    a.addEventListener('loadedmetadata', () => {
+      const duration = a.duration;
+      setAudioInfo({ name: file.name, duration });
+      setBgExport((p) => {
+        const nextEnd = p.endSecond === undefined ? duration : Math.min(duration, p.endSecond);
+        const nextStart = Math.min(p.startSecond, Math.max(0, nextEnd - 0.01));
+        return { ...p, startSecond: nextStart, endSecond: nextEnd, duration: Math.max(0.01, nextEnd - nextStart) };
+      });
+      audioElRef.current = a;
+      mediaElRef.current = a;
+      const src = new AudioSource({ element: a, url });
+      audioSourceRef.current = src;
+      a.currentTime = 0;
+    });
+
+    // Switch to reactivity tab to show the new audio-reactive UI
+    setMainTab('reactivity');
+
+    const uploadId = addToast('Importing audio into project folder…', 'progress', true);
+    uploadAudio(pid, file, (pct) => {
+      setProjectStatus({ kind: 'progress', message: 'Importing audio into project folder', progress: pct, detail: `Folder: projects/${pid}` });
+      updateToast(uploadId, `Importing… ${pct}%`, 'progress');
+    }).then(() => {
+      setProjectStatus({ kind: 'progress', message: 'Audio imported; starting transcription', detail: `Folder: projects/${pid}` });
+      updateToast(uploadId, 'Audio imported — starting transcription…', 'info');
+      listProjects().then(setProjects);
+    }).catch(err => {
+      setProjectStatus({ kind: 'error', message: `Import failed: ${err.message}` });
+      updateToast(uploadId, `Import failed: ${err.message}`, 'error');
+    });
+  };
+
+  const loadFile = (file: File) => {
+    const pid = activeProjectIdRef.current;
+    if (!pid) {
+      setProjectStatus({ kind: 'error', message: 'Create or select a project before importing media' });
+      addToast('Create or select a project before importing media', 'error');
+      return;
+    }
+    if (isAudioFile(file)) {
+      loadAudioFile(file, pid);
+    } else {
+      loadVideoFile(file, pid);
+    }
+  };
   const onPickFile: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const f = e.target.files?.[0];
     if (f) loadFile(f);
@@ -612,10 +848,15 @@ export const App: React.FC = () => {
     if (f) loadFile(f);
   };
   const togglePlay = () => {
-    const v = videoElRef.current;
+    const v = mediaElRef.current;
     if (!v) return;
-    const { start, end } = resolveExportRange(vidExport, videoInfo?.duration ?? v.duration);
+    const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? v.duration;
+    const params = videoInfo ? vidExport : bgExport;
+    const { start, end } = resolveExportRange(params, totalDuration);
     if (v.paused) {
+      // Audio Web Audio context needs to be resumed from a user gesture.
+      audioSourceRef.current?.ensureGraph();
+      audioSourceRef.current?.resume();
       const cur = v.currentTime || 0;
       let target = clamp(cur, start, end);
       if (cur >= end - 0.001 || cur < start) target = start;
@@ -640,9 +881,11 @@ export const App: React.FC = () => {
   const togglePlayRef = useRef(togglePlay);
   useEffect(() => { togglePlayRef.current = togglePlay; });
   const handleSeekPlayhead = (second: number) => {
-    const v = videoElRef.current;
+    const v = mediaElRef.current;
     if (!v) return;
-    const { start, end } = resolveExportRange(vidExport, videoInfo?.duration ?? v.duration);
+    const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? v.duration;
+    const params = videoInfo ? vidExport : bgExport;
+    const { start, end } = resolveExportRange(params, totalDuration);
     const target = clamp(second, start, end);
     v.currentTime = target;
     setPlayheadSecond(target);
@@ -661,11 +904,11 @@ export const App: React.FC = () => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (isEditableTarget(e.target)) return;
       if (e.code === 'Space') {
-        if (!videoElRef.current) return;
+        if (!mediaElRef.current) return;
         e.preventDefault();
         togglePlayRef.current();
       } else if (e.key === 'm' || e.key === 'M') {
-        if (!videoElRef.current) return;
+        if (!mediaElRef.current) return;
         e.preventDefault();
         setMuted((m) => !m);
       }
@@ -736,9 +979,16 @@ export const App: React.FC = () => {
     const bgRenderer = bgRendererRef.current;
     const videoRenderer = videoRendererRef.current;
     const video = videoElRef.current;
+    const audio = audioSourceRef.current;
     const params = videoInfo ? vidExport : bgExport;
-    const range = resolveExportRange(params, videoInfo?.duration ?? null);
+    const sourceDuration = videoInfo?.duration ?? audioInfo?.duration ?? null;
+    const range = resolveExportRange(params, sourceDuration);
     if (videoLayerOn && (!videoRenderer || !video)) throw new Error('Load a video before exporting the video layer.');
+
+    // Pre-compute deterministic per-frame audio bands when audio is loaded.
+    if (audio && audioReactivity.enabled) {
+      try { await audio.preloadEnvelope(); } catch (e) { console.warn('Audio envelope preload failed', e); }
+    }
 
     const width = Math.max(1, Math.floor(params.width));
     const height = Math.max(1, Math.floor(params.height));
@@ -751,7 +1001,8 @@ export const App: React.FC = () => {
     if (!ctx) throw new Error('Could not create export canvas.');
 
     exportingRef.current = true;
-    if (video) { video.pause(); setPlaying(false); }
+    const mediaEl = video ?? audioElRef.current;
+    if (mediaEl) { mediaEl.pause(); setPlaying(false); }
     const toastId = addToast('Creating project export folder…', 'progress', true);
 
     try {
@@ -763,7 +1014,11 @@ export const App: React.FC = () => {
         height,
         fps: params.fps,
         totalFrames: total,
-        layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn },
+        layers: {
+          background: bgLayerOn,
+          video: videoLayerOn,
+          captions: captionsLayerOn,
+        },
       });
       setProjectStatus({ kind: 'progress', message: 'Exporting PNG sequence', detail: created.folder, progress: 0 });
       updateToast(toastId, `Exporting to ${created.folder}`, 'progress');
@@ -773,7 +1028,17 @@ export const App: React.FC = () => {
         const t = range.start + i / params.fps;
         ctx.clearRect(0, 0, width, height);
 
+        // Deterministic bands for this frame (zeros if no audio loaded).
+        const bands = audio && audioReactivity.enabled
+          ? audio.getDeterministicBands(t)
+          : { rms: 0, low: 0, mid: 0, high: 0 };
+        const g = audioReactivity.gain;
+
         if (bgLayerOn && bgRenderer) {
+          bgRenderer.setModulation(audio && audioReactivity.enabled ? {
+            speed: bands.rms * g * audioReactivity.modSpeed * 1.5,
+            brightness: bands.rms * g * audioReactivity.modBrightness,
+          } : { speed: 0, brightness: 0 });
           bgRenderer.renderFrame(t);
           ctx.drawImage(bgRenderer.renderer.domElement as HTMLCanvasElement, 0, 0, width, height);
         }
@@ -833,6 +1098,7 @@ export const App: React.FC = () => {
   const frameStyle: React.CSSProperties = videoInfo
     ? { position: 'absolute', left: previewFrame.x, top: previewFrame.y, width: previewFrame.w, height: previewFrame.h }
     : { position: 'absolute', inset: 0, width: '100%', height: '100%' };
+  const audioMode = !!audioInfo && !videoInfo;
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', height: '100vh', minHeight: 0, overflow: 'hidden', gap: 0 }}>
@@ -859,7 +1125,7 @@ export const App: React.FC = () => {
         />
         <canvas
           ref={videoCanvasRef}
-          style={{ ...frameStyle, display: videoLayerOn ? 'block' : 'none' }}
+          style={{ ...frameStyle, display: videoLayerOn && !audioMode ? 'block' : 'none' }}
         />
 
         {/* composition guide outline (only the active one) */}
@@ -915,7 +1181,7 @@ export const App: React.FC = () => {
               mode={captionMode}
               style={captionStyle}
               frame={captionFrame}
-              timeSourceRef={videoElRef}
+              timeSourceRef={mediaElRef}
             />
           );
         })()}
@@ -923,7 +1189,7 @@ export const App: React.FC = () => {
         {/* status toasts */}
         <StatusToast toasts={toasts} onDismiss={dismissToast} />
 
-        {videoLayerOn && !videoInfo && (
+        {!videoInfo && !audioInfo && (
           <div
             onDrop={onDrop}
             onDragOver={(e) => e.preventDefault()}
@@ -934,8 +1200,8 @@ export const App: React.FC = () => {
               background: 'rgba(0,0,0,0.35)',
             }}
           >
-            <div>No video loaded.</div>
-            <div style={{ fontSize: 11 }}>Drop a video here or use the panel on the right.</div>
+            <div>No media loaded.</div>
+            <div style={{ fontSize: 11 }}>Drop a video or audio file here or use the panel on the right.</div>
           </div>
         )}
       </div>
@@ -951,8 +1217,8 @@ export const App: React.FC = () => {
           onCreate={handleCreateProject}
         />
         <ProjectStatusPanel project={activeProject} status={projectStatus} />
-        {/* video transport (when a video is loaded) */}
-        {videoInfo && (
+        {/* media transport (when a video or audio file is loaded) */}
+        {(videoInfo || audioInfo) && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a' }}>
             <button
               onClick={togglePlay}
@@ -968,19 +1234,23 @@ export const App: React.FC = () => {
               {muted ? '🔇' : '🔊'}
             </button>
             <span style={{ color: '#aaa', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {videoInfo.name}
+              {videoInfo?.name ?? audioInfo?.name}
             </span>
             <span style={{ color: '#666', fontSize: 11, marginLeft: 'auto', flexShrink: 0 }}>
-              {videoInfo.w}×{videoInfo.h} · {videoInfo.duration.toFixed(1)}s
+              {videoInfo
+                ? `${videoInfo.w}×${videoInfo.h} · ${videoInfo.duration.toFixed(1)}s`
+                : audioInfo
+                  ? `audio · ${audioInfo.duration.toFixed(1)}s`
+                  : ''}
             </span>
           </div>
         )}
 
         {/* layer toggles */}
-        <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ color: '#666', textTransform: 'uppercase', letterSpacing: 1, marginRight: 4 }}>Layers</span>
           <LayerToggle label="Background" on={bgLayerOn} onClick={() => setBgLayerOn((v) => !v)} />
-          <LayerToggle label="Video" on={videoLayerOn} onClick={() => setVideoLayerOn((v) => !v)} />
+          {!audioMode && <LayerToggle label="Video" on={videoLayerOn} onClick={() => setVideoLayerOn((v) => !v)} />}
           <LayerToggle label="Captions" on={captionsLayerOn} onClick={() => setCaptionsLayerOn((v) => !v)} />
         </div>
 
@@ -1007,8 +1277,9 @@ export const App: React.FC = () => {
         <TabBar<MainTab>
           tabs={[
             { value: 'background', label: 'Background' },
-            { value: 'video', label: 'Video' },
-            { value: 'export', label: 'Export' },
+            { value: 'video',      label: audioMode ? 'Audio' : 'Video' },
+            { value: 'reactivity', label: 'Reactivity' },
+            { value: 'export',     label: 'Export' },
           ]}
           value={mainTab}
           onChange={setMainTab}
@@ -1032,6 +1303,26 @@ export const App: React.FC = () => {
                     if (p) { setBg(p.background); setBgDither(p.dither); }
                   }}
                 />
+                <button
+                  onClick={() => {
+                    setBg(DEFAULT_BACKGROUND);
+                    setBgDither(DEFAULT_DITHER);
+                    addToast('Background reset to defaults', 'success');
+                  }}
+                  style={{
+                    alignSelf: 'flex-start',
+                    padding: '6px 10px',
+                    background: '#222',
+                    color: '#ddd',
+                    border: '1px solid #333',
+                    borderRadius: 3,
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                    fontSize: 12,
+                  }}
+                >
+                  Reset to defaults
+                </button>
               </Section>
               <TabBar<BgSubTab>
                 tabs={[
@@ -1049,32 +1340,34 @@ export const App: React.FC = () => {
 
           {mainTab === 'video' && (
             <>
-              {!videoInfo ? (
-                <Section title="Import video">
+              {!videoInfo && !audioInfo ? (
+                <Section title="Import media">
                   <div style={{ color: '#aaa', marginBottom: 8 }}>
-                    Choose a video file to process. You can also drop one onto the preview.
+                    Choose a video <em>or audio</em> file. Audio files skip the visible video layer
+                    and unlock the audio-reactive Figure tab. You can also drop a file onto the preview.
                   </div>
                   <label style={{
                     display: 'inline-block', padding: '8px 14px', background: '#1f6feb',
                     color: '#fff', borderRadius: 3, cursor: 'pointer',
                   }}>
-                    Choose video…
-                    <input type="file" accept="video/*" onChange={onPickFile} style={{ display: 'none' }} />
+                    Choose video or audio…
+                    <input type="file" accept="video/*,audio/*" onChange={onPickFile} style={{ display: 'none' }} />
                   </label>
                 </Section>
               ) : (
                 <>
                   <Section title="Source">
                     <div style={{ color: '#aaa', marginBottom: 6 }}>
-                      {videoInfo.name}<br />
-                      {videoInfo.w}×{videoInfo.h} · {videoInfo.duration.toFixed(2)}s
+                      {videoInfo
+                        ? <>{videoInfo.name}<br />{videoInfo.w}×{videoInfo.h} · {videoInfo.duration.toFixed(2)}s</>
+                        : <>{audioInfo!.name}<br />audio-only · {audioInfo!.duration.toFixed(2)}s</>}
                     </div>
                     <label style={{
                       display: 'inline-block', padding: '6px 12px', background: '#222',
                       color: '#ddd', borderRadius: 3, cursor: 'pointer',
                     }}>
                       Replace…
-                      <input type="file" accept="video/*" onChange={onPickFile} style={{ display: 'none' }} />
+                      <input type="file" accept="video/*,audio/*" onChange={onPickFile} style={{ display: 'none' }} />
                     </label>
                   </Section>
                   <Section title="Captions">
@@ -1113,43 +1406,56 @@ export const App: React.FC = () => {
                     )}
                   </Section>
                   <CaptionFontControls value={captionStyle} onChange={setCaptionStyle} />
-                  <Section title="Preset">
-                    <Select
-                      label="load"
-                      value={''}
-                      options={[
-                        { label: '— pick a preset —', value: '' },
-                        ...VIDEO_PRESETS.map((p) => ({ label: p.name, value: p.name })),
-                      ]}
-                      onChange={(name) => {
-                        const p = VIDEO_PRESETS.find((x) => x.name === name);
-                        if (p) setVid(p.params);
-                      }}
-                    />
-                  </Section>
-                  <div style={{ color: '#888', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
-                    Shader
-                  </div>
-                  <TabBar<VideoSubTab>
-                    tabs={[
-                      { value: 'levels', label: 'Levels' },
-                      { value: 'tone', label: 'Tone' },
-                      { value: 'color', label: 'Color' },
-                      { value: 'distortion', label: 'Distort' },
-                      { value: 'dither', label: 'Dither' },
-                    ]}
-                    value={videoSubTab}
-                    onChange={setVideoSubTab}
-                    variant="sub"
-                  />
-                  {videoSubTab === 'levels' && <VideoLevelsSection value={vid} onChange={setVid} />}
-                  {videoSubTab === 'tone' && <VideoToneSection value={vid} onChange={setVid} />}
-                  {videoSubTab === 'color' && <VideoColorSection value={vid} onChange={setVid} />}
-                  {videoSubTab === 'distortion' && <VideoDistortionSection value={vid} onChange={setVid} />}
-                  {videoSubTab === 'dither' && <VideoDitherSection value={vid} onChange={setVid} />}
+                  {!audioMode && (
+                    <>
+                      <Section title="Preset">
+                        <Select
+                          label="load"
+                          value={''}
+                          options={[
+                            { label: '— pick a preset —', value: '' },
+                            ...VIDEO_PRESETS.map((p) => ({ label: p.name, value: p.name })),
+                          ]}
+                          onChange={(name) => {
+                            const p = VIDEO_PRESETS.find((x) => x.name === name);
+                            if (p) setVid(p.params);
+                          }}
+                        />
+                      </Section>
+                      <div style={{ color: '#888', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
+                        Shader
+                      </div>
+                      <TabBar<VideoSubTab>
+                        tabs={[
+                          { value: 'levels', label: 'Levels' },
+                          { value: 'tone', label: 'Tone' },
+                          { value: 'color', label: 'Color' },
+                          { value: 'distortion', label: 'Distort' },
+                          { value: 'dither', label: 'Dither' },
+                        ]}
+                        value={videoSubTab}
+                        onChange={setVideoSubTab}
+                        variant="sub"
+                      />
+                      {videoSubTab === 'levels' && <VideoLevelsSection value={vid} onChange={setVid} />}
+                      {videoSubTab === 'tone' && <VideoToneSection value={vid} onChange={setVid} />}
+                      {videoSubTab === 'color' && <VideoColorSection value={vid} onChange={setVid} />}
+                      {videoSubTab === 'distortion' && <VideoDistortionSection value={vid} onChange={setVid} />}
+                      {videoSubTab === 'dither' && <VideoDitherSection value={vid} onChange={setVid} />}
+                    </>
+                  )}
                 </>
               )}
             </>
+          )}
+
+          {mainTab === 'reactivity' && (
+            <ReactivityControls
+              value={audioReactivity}
+              onChange={setAudioReactivity}
+              hasAudio={!!audioInfo}
+              bandsRef={lastBandsRef}
+            />
           )}
 
           {mainTab === 'export' && (
@@ -1157,9 +1463,9 @@ export const App: React.FC = () => {
               params={activeExportParams}
               onChange={setActiveExportParams}
               onExport={exportComposition}
-              lockedDuration={videoInfo?.duration}
-              playheadSecond={videoInfo ? playheadSecond : undefined}
-              onSeekPlayhead={videoInfo ? handleSeekPlayhead : undefined}
+              lockedDuration={videoInfo?.duration ?? audioInfo?.duration}
+              playheadSecond={(videoInfo || audioInfo) ? playheadSecond : undefined}
+              onSeekPlayhead={(videoInfo || audioInfo) ? handleSeekPlayhead : undefined}
               layerSummary={exportLayerSummary}
             />
           )}
