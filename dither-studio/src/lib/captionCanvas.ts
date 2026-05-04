@@ -65,8 +65,14 @@ function activeWordAt(data: TranscriptData, timeMs: number) {
   return timeMs <= utteranceEnd + 1000 ? previous : null;
 }
 
-function activeSentenceAt(data: TranscriptData, timeMs: number) {
-  const sentences = splitSentences(data);
+function activeSentenceAt(data: TranscriptData, timeMs: number, style: CaptionStyle) {
+  const sentences = splitSentences(data, {
+    mode: style.lineSplitMode ?? 'sentence',
+    maxWords: style.lineMaxWords,
+    maxChars: style.lineMaxChars,
+    maxSeconds: style.lineMaxSeconds,
+    targetWords: style.lineTargetWords,
+  });
   return sentences.find((s, i) => {
     const next = sentences[i + 1]?.start ?? Number.POSITIVE_INFINITY;
     return timeMs >= s.start && timeMs < next;
@@ -108,7 +114,7 @@ export function drawCaptionsToCanvas(
     return;
   }
 
-  const sentence = activeSentenceAt(transcript, timeMs);
+  const sentence = activeSentenceAt(transcript, timeMs, style);
   if (!sentence) {
     ctx.restore();
     return;

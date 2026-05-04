@@ -119,6 +119,25 @@ export interface CaptionStyle {
    */
   underlineFadeMs: number;
   wordHighlightEnabled: boolean;
+  /**
+   * How to chop transcript words into "lines" for line-mode captions.
+   *  - 'sentence' : split on `.`, `!`, `?` (one whole sentence per showing)
+   *  - 'words'    : flush every `lineMaxWords` words (ignores punctuation)
+   *  - 'chars'    : flush when adding the next word would exceed `lineMaxChars`
+   *  - 'duration' : flush when the buffered words span >= `lineMaxSeconds`
+   *  - 'balanced' : sentence-aware. Per sentence, split into
+   *                 `ceil(sentenceWords / lineTargetWords)` evenly-sized chunks.
+   *                 A new caption never spans two sentences.
+   */
+  lineSplitMode: 'sentence' | 'words' | 'chars' | 'duration' | 'balanced';
+  /** Max words per line in 'words' mode. */
+  lineMaxWords: number;
+  /** Max characters per line in 'chars' mode (counted including spaces). */
+  lineMaxChars: number;
+  /** Max duration in seconds per line in 'duration' mode. */
+  lineMaxSeconds: number;
+  /** Target words per caption showing in 'balanced' mode. */
+  lineTargetWords: number;
   color: string;
   dimColor: string;
 }
@@ -219,6 +238,11 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   underlineMode: 'draw',
   underlineFadeMs: 150,
   wordHighlightEnabled: true,
+  lineSplitMode: 'sentence',
+  lineMaxWords: 8,
+  lineMaxChars: 60,
+  lineMaxSeconds: 3,
+  lineTargetWords: 6,
   color: '#ffffff',
   dimColor: 'rgba(255,255,255,0.5)',
 };

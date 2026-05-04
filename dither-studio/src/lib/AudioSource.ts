@@ -25,7 +25,7 @@ export interface AudioBands {
 
 export interface AudioSourceOptions {
   /** Media element used for live playback (created/managed externally). */
-  element: HTMLAudioElement;
+  element: HTMLMediaElement;
   /** URL to fetch + decode for offline analysis. */
   url: string;
 }
@@ -35,7 +35,7 @@ const TIME_DOMAIN_BYTES = FFT_SIZE;
 const FREQ_BIN_COUNT = FFT_SIZE / 2;
 
 export class AudioSource {
-  readonly element: HTMLAudioElement;
+  readonly element: HTMLMediaElement;
   private url: string;
   private ctx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -186,7 +186,7 @@ export class AudioSource {
       const totalSec = audioBuffer.duration;
       const frames = Math.ceil(totalSec * this.envelopeRate);
       const env = new Float32Array(frames * 4);
-      const window = Math.max(1, Math.floor(sr / this.envelopeRate));
+      const windowSize = Math.max(1, Math.floor(sr / this.envelopeRate));
       const fullData = audioBuffer.getChannelData(0);
       const lowData = low.getChannelData(0);
       const midData = mid.getChannelData(0);
@@ -196,7 +196,7 @@ export class AudioSource {
       let max = 1e-6;
       for (let i = 0; i < frames; i++) {
         const start = Math.floor(i * sr / this.envelopeRate);
-        const end = Math.min(fullData.length, start + window);
+        const end = Math.min(fullData.length, start + windowSize);
         const rms = rmsRange(fullData, start, end);
         const lo = rmsRange(lowData, start, end);
         const md = rmsRange(midData, start, end);

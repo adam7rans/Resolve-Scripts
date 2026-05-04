@@ -39,7 +39,23 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
   }, [timeSourceRef]);
 
   const utterances = transcript.utterances;
-  const sentences = useMemo<CaptionSentence[]>(() => splitSentences(transcript), [transcript]);
+  const sentences = useMemo<CaptionSentence[]>(
+    () => splitSentences(transcript, {
+      mode: captionStyle.lineSplitMode ?? 'sentence',
+      maxWords: captionStyle.lineMaxWords,
+      maxChars: captionStyle.lineMaxChars,
+      maxSeconds: captionStyle.lineMaxSeconds,
+      targetWords: captionStyle.lineTargetWords,
+    }),
+    [
+      transcript,
+      captionStyle.lineSplitMode,
+      captionStyle.lineMaxWords,
+      captionStyle.lineMaxChars,
+      captionStyle.lineMaxSeconds,
+      captionStyle.lineTargetWords,
+    ],
+  );
 
   const activeUtterance = useMemo(() => {
     return utterances.find((u, i) => {

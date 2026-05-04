@@ -39,6 +39,12 @@ function safeAudioFilename(name: string): string {
   const base = path.basename(name, ext).trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'audio';
   return `${base}${ext || '.mp3'}`;
 }
+function safeMusicFilename(name: string): string {
+  const ext = path.extname(name).toLowerCase();
+  const base = path.basename(name, ext).trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'music';
+  // Prefix with `music-` so it never collides with the speech audio file.
+  return `music-${base}${ext || '.mp3'}`;
+}
 function safePngFilename(name: string): string {
   const ext = path.extname(name).toLowerCase();
   const base = path.basename(name, ext).trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'frame';
@@ -61,7 +67,7 @@ function writeProject(id: string, data: any) {
 const SETTINGS_KEYS = new Set([
   'background', 'backgroundDither', 'video', 'captionMode', 'captionStyle', 'layers',
   'guides', 'activeGuide', 'cropToGuide', 'exportBackground', 'exportVideo', 'ui',
-  'audioReactivity', 'mathFigure', 'exportAudio',
+  'audioReactivity', 'mathFigure', 'exportAudio', 'music',
 ]);
 function readSettings(id: string, project?: any): any {
   const p = path.join(projectDir(id), SETTINGS_FILE);
@@ -109,6 +115,7 @@ function projectMeta(id: string) {
     mediaType: proj.mediaType || (proj.audioFile ? 'audio' : proj.videoFile ? 'video' : null),
     hasVideo: !!(proj.videoFile && fs.existsSync(path.join(projectDir(id), proj.videoFile))),
     hasAudio: !!(proj.audioFile && fs.existsSync(path.join(projectDir(id), proj.audioFile))),
+    hasMusic: !!(proj.musicFile && fs.existsSync(path.join(projectDir(id), proj.musicFile))),
     hasTranscript: hasCaption(id, proj),
   };
 }
@@ -149,6 +156,7 @@ app.get('/api/projects/:id', (req, res) => {
     mediaType: proj.mediaType || (proj.audioFile ? 'audio' : proj.videoFile ? 'video' : null),
     hasVideo: !!(proj.videoFile && fs.existsSync(path.join(projectDir(id), proj.videoFile))),
     hasAudio: !!(proj.audioFile && fs.existsSync(path.join(projectDir(id), proj.audioFile))),
+    hasMusic: !!(proj.musicFile && fs.existsSync(path.join(projectDir(id), proj.musicFile))),
     hasTranscript: hasCaption(id, proj),
   });
 });
@@ -286,6 +294,73 @@ app.get('/api/projects/:id/audio', (req, res) => {
   } else {
     res.writeHead(200, { 'Content-Length': total, 'Content-Type': mime, 'Accept-Ranges': 'bytes' });
     fs.createReadStream(ap).pipe(res);
+  }
+});
+
+// Upload backing music — saved to the project folder; no transcription.
+const musicUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => {
+      const dir = projectDir(req.params.id);
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (_req, file, cb) => cb(null, safeMusicFilename(file.originalname)),
+  }),
+  limits: { fileSize: 1024 * 1024 * 1024 }, // 1 GB cap
+});
+
+app.post('/api/projects/:id/music', musicUpload.single('music'), (req, res) => {
+  const id = req.params.id;
+  const proj = readProject(id);
+  if (!proj || !req.file) return void res.status(400).json({ error: 'Bad request' });
+
+  // Replace any existing music file so we don't accumulate orphans.
+  if (proj.musicFile && proj.musicFile !== req.file.filename) {
+    try { fs.unlinkSync(path.join(projectDir(id), proj.musicFile)); } catch {}
+  }
+  proj.musicFile = req.file.filename;
+  proj.originalMusicName = req.file.originalname;
+  proj.updatedAt = new Date().toISOString();
+  writeProject(id, proj);
+
+  res.json({ ok: true, filename: req.file.filename, originalName: req.file.originalname });
+});
+
+// Serve music with range-request support (same MIME table as audio).
+app.get('/api/projects/:id/music', (req, res) => {
+  const proj = readProject(req.params.id);
+  if (!proj?.musicFile) return void res.status(404).json({ error: 'No music' });
+  const mp = path.join(projectDir(req.params.id), proj.musicFile);
+  if (!fs.existsSync(mp)) return void res.status(404).json({ error: 'File not found' });
+
+  const stat = fs.statSync(mp);
+  const total = stat.size;
+  const ext = path.extname(proj.musicFile).toLowerCase();
+  const mime =
+    ext === '.wav' ? 'audio/wav' :
+    ext === '.m4a' ? 'audio/mp4' :
+    ext === '.flac' ? 'audio/flac' :
+    ext === '.ogg' ? 'audio/ogg' :
+    ext === '.opus' ? 'audio/ogg' :
+    ext === '.aac' ? 'audio/aac' :
+    'audio/mpeg';
+  const range = req.headers.range;
+
+  if (range) {
+    const [s, e] = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(s, 10);
+    const end = e ? parseInt(e, 10) : total - 1;
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${total}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': end - start + 1,
+      'Content-Type': mime,
+    });
+    fs.createReadStream(mp, { start, end }).pipe(res);
+  } else {
+    res.writeHead(200, { 'Content-Length': total, 'Content-Type': mime, 'Accept-Ranges': 'bytes' });
+    fs.createReadStream(mp).pipe(res);
   }
 });
 

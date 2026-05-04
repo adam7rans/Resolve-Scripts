@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BackgroundRenderer } from '../lib/BackgroundRenderer';
 import { VideoRenderer } from '../lib/VideoRenderer';
 import { AudioSource, type AudioBands } from '../lib/AudioSource';
+import { MusicPlayer, DEFAULT_MUSIC_PARAMS, type MusicParams } from '../lib/MusicPlayer';
 import {
   DEFAULT_BACKGROUND, DEFAULT_DITHER, DEFAULT_VIDEO, DEFAULT_EXPORT,
   DEFAULT_CAPTION_STYLE, DEFAULT_AUDIO_REACTIVITY,
@@ -25,13 +26,13 @@ import { ProjectBar } from './ProjectBar';
 import { StatusToast, type Toast } from './StatusToast';
 import {
   listProjects, createProject, getProject, saveSettings,
-  uploadVideo, uploadAudio, uploadCaption,
-  getVideoUrl, getAudioUrl, getTranscript, openEventStream,
+  uploadVideo, uploadAudio, uploadCaption, uploadMusic,
+  getVideoUrl, getAudioUrl, getMusicUrl, getTranscript, openEventStream,
   createProjectExport, uploadExportFrame, finishProjectExport,
   type ProjectMeta,
 } from '../lib/projectApi';
 
-type MainTab = 'background' | 'video' | 'reactivity' | 'export';
+type MainTab = 'background' | 'video' | 'reactivity' | 'music' | 'export';
 type BgSubTab = 'noise' | 'dither';
 type VideoSubTab = 'levels' | 'tone' | 'color' | 'distortion' | 'dither';
 
@@ -215,6 +216,53 @@ const CaptionFontControls: React.FC<{ value: CaptionStyle; onChange: (v: Caption
         onChange={(underlineFadeMs) => set({ underlineFadeMs: Math.round(underlineFadeMs) })}
       />
       <Toggle label="word highlight" value={value.wordHighlightEnabled} onChange={(wordHighlightEnabled) => set({ wordHighlightEnabled })} />
+      <Select
+        label="line split"
+        value={value.lineSplitMode ?? 'sentence'}
+        options={[
+          { label: 'sentence (.!?)',  value: 'sentence' },
+          { label: 'balanced',        value: 'balanced' },
+          { label: 'max words',       value: 'words' },
+          { label: 'max chars',       value: 'chars' },
+          { label: 'max seconds',     value: 'duration' },
+        ]}
+        onChange={(lineSplitMode) => set({ lineSplitMode: lineSplitMode as CaptionStyle['lineSplitMode'] })}
+      />
+      {value.lineSplitMode === 'balanced' && (
+        <Slider
+          label="target words"
+          value={value.lineTargetWords ?? 6}
+          min={2} max={15} step={1}
+          ticks={[4, 6, 8]}
+          onChange={(lineTargetWords) => set({ lineTargetWords: Math.max(1, Math.round(lineTargetWords)) })}
+        />
+      )}
+      {value.lineSplitMode === 'words' && (
+        <Slider
+          label="max words"
+          value={value.lineMaxWords ?? 8}
+          min={1} max={20} step={1}
+          onChange={(lineMaxWords) => set({ lineMaxWords: Math.max(1, Math.round(lineMaxWords)) })}
+        />
+      )}
+      {value.lineSplitMode === 'chars' && (
+        <Slider
+          label="max chars"
+          value={value.lineMaxChars ?? 60}
+          min={10} max={140} step={1}
+          ticks={[40, 60, 80]}
+          onChange={(lineMaxChars) => set({ lineMaxChars: Math.max(1, Math.round(lineMaxChars)) })}
+        />
+      )}
+      {value.lineSplitMode === 'duration' && (
+        <Slider
+          label="max seconds"
+          value={value.lineMaxSeconds ?? 3}
+          min={0.5} max={10} step={0.1}
+          ticks={[1, 2, 3, 5]}
+          onChange={(lineMaxSeconds) => set({ lineMaxSeconds: Math.max(0.1, lineMaxSeconds) })}
+        />
+      )}
     </Section>
   );
 };
@@ -278,6 +326,120 @@ const BandMeter: React.FC<{ label: string; value: number }> = ({ label, value })
   );
 };
 
+const MusicControls: React.FC<{
+  value: MusicParams;
+  onChange: (v: MusicParams) => void;
+  hasMusic: boolean;
+  musicName: string | null;
+  onPickFile: (file: File) => void;
+  onClear: () => void;
+  /** Live duck gain (0..1) for the meter. */
+  duckGainRef: React.MutableRefObject<number>;
+  /** Live speech RMS (0..1) for the meter. */
+  speechRmsRef: React.MutableRefObject<number>;
+}> = ({ value, onChange, hasMusic, musicName, onPickFile, onClear, duckGainRef, speechRmsRef }) => {
+  const set = (patch: Partial<MusicParams>) => onChange({ ...value, ...patch });
+  const setSc = (patch: Partial<MusicParams['sidechain']>) =>
+    onChange({ ...value, sidechain: { ...value.sidechain, ...patch } });
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Re-render at ~30fps so the live meters update.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 33);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <>
+      <Section title="File">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={AUDIO_EXTENSIONS.join(',') + ',audio/*'}
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onPickFile(f);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+          }}
+        />
+        {hasMusic ? (
+          <>
+            <div style={{ color: '#aaa', fontSize: 11, marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              ♪ {musicName ?? 'music'}
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                style={{ flex: 1, background: '#1a1a1a', color: '#ddd', border: '1px solid #2a2a2a', padding: '6px 10px', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit' }}
+              >
+                Replace music…
+              </button>
+              <button
+                onClick={onClear}
+                style={{ background: '#1a1a1a', color: '#aaa', border: '1px solid #2a2a2a', padding: '6px 10px', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit' }}
+              >
+                Remove
+              </button>
+            </div>
+          </>
+        ) : (
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            style={{ width: '100%', background: '#1f6feb', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            Upload music…
+          </button>
+        )}
+      </Section>
+
+      <Section title="Mix">
+        <Slider
+          label="volume"
+          value={value.volume}
+          min={0} max={1} step={0.01}
+          onChange={(volume) => set({ volume })}
+        />
+        <Toggle label="muted" value={value.muted} onChange={(muted) => set({ muted })} />
+      </Section>
+
+      <Section title="Sidechain (speech ducks music)">
+        <Toggle label="enabled" value={value.sidechain.enabled} onChange={(enabled) => setSc({ enabled })} />
+        <Slider
+          label="threshold"
+          value={value.sidechain.threshold}
+          min={0} max={1} step={0.01}
+          onChange={(threshold) => setSc({ threshold })}
+        />
+        <Slider
+          label="amount"
+          value={value.sidechain.amount}
+          min={0} max={1} step={0.01}
+          onChange={(amount) => setSc({ amount })}
+        />
+        <Slider
+          label="attack ms"
+          value={value.sidechain.attackMs}
+          min={5} max={500} step={5}
+          ticks={[50, 100, 200]}
+          onChange={(attackMs) => setSc({ attackMs: Math.round(attackMs) })}
+        />
+        <Slider
+          label="release ms"
+          value={value.sidechain.releaseMs}
+          min={20} max={2000} step={10}
+          ticks={[200, 500, 1000]}
+          onChange={(releaseMs) => setSc({ releaseMs: Math.round(releaseMs) })}
+        />
+        <BandMeter label="speech" value={speechRmsRef.current} />
+        {/* duck gain is 0..1 where 1 = no ducking; show as inverted "ducking %" */}
+        <BandMeter label="duck" value={1 - duckGainRef.current} />
+      </Section>
+    </>
+  );
+};
+
 export const App: React.FC = () => {
   // ---------- shared state ----------
   const [mainTab, setMainTab] = useState<MainTab>('background');
@@ -293,6 +455,11 @@ export const App: React.FC = () => {
   // audio-only mode state (parallel to videoInfo)
   const [audioInfo, setAudioInfo] = useState<{ name: string; duration: number } | null>(null);
   const [audioReactivity, setAudioReactivity] = useState<AudioReactivityParams>(DEFAULT_AUDIO_REACTIVITY);
+
+  // backing music (separate audio stream)
+  const [music, setMusic] = useState<MusicParams>(DEFAULT_MUSIC_PARAMS);
+  const [musicLayerOn, setMusicLayerOn] = useState(true);
+  const [musicInfo, setMusicInfo] = useState<{ name: string } | null>(null);
 
   // transcript / captions
   const [transcript, setTranscript] = useState<TranscriptData | null>(null);
@@ -350,10 +517,15 @@ export const App: React.FC = () => {
   const mediaElRef = useRef<HTMLMediaElement | null>(null);
   const videoBlobUrlRef = useRef<string | null>(null);
   const audioBlobUrlRef = useRef<string | null>(null);
+  // music
+  const musicElRef = useRef<HTMLAudioElement | null>(null);
+  const musicPlayerRef = useRef<MusicPlayer | null>(null);
+  const musicDuckGainRef = useRef<number>(1);
   const rafRef = useRef<number | null>(null);
   const startRef = useRef(performance.now());
   const exportingRef = useRef(false);
   const lastBandsRef = useRef<AudioBands>({ rms: 0, low: 0, mid: 0, high: 0 });
+  const speechRmsRef = useRef<number>(0);
   const previewFrame = videoInfo
     ? fitRect(previewSize.w, previewSize.h, videoInfo.w, videoInfo.h)
     : { x: 0, y: 0, w: previewSize.w, h: previewSize.h };
@@ -383,7 +555,7 @@ export const App: React.FC = () => {
         // Read audio bands once per frame (live AnalyserNode).
         const audio = audioSourceRef.current;
         const ar = audioReactivityRef.current;
-        const bands: AudioBands = audio && ar.enabled
+        const bands: AudioBands = audio
           ? audio.getBands(ar.attack, ar.release)
           : { rms: 0, low: 0, mid: 0, high: 0 };
         lastBandsRef.current = bands;
@@ -402,6 +574,17 @@ export const App: React.FC = () => {
         }
         if (videoLayerOnRef.current) {
           videoRendererRef.current?.renderFrame();
+        }
+
+        // Sidechain: read latest speech RMS (already smoothed) and apply to
+        // the music player's duckGain. Always update so the duck releases back
+        // to 1.0 even when speech is silent.
+        const player = musicPlayerRef.current;
+        if (player) {
+          const m = musicRef.current;
+          const rms = bands.rms;
+          speechRmsRef.current = rms;
+          musicDuckGainRef.current = player.applySidechain(rms, m.sidechain);
         }
       }
       rafRef.current = requestAnimationFrame(loop);
@@ -427,11 +610,23 @@ export const App: React.FC = () => {
   const bgLayerOnRef = useRef(bgLayerOn);
   const videoLayerOnRef = useRef(videoLayerOn);
   const audioReactivityRef = useRef(audioReactivity);
+  const musicRef = useRef(music);
   useEffect(() => { bgLayerOnRef.current = bgLayerOn; }, [bgLayerOn]);
   useEffect(() => { videoLayerOnRef.current = videoLayerOn; }, [videoLayerOn]);
   useEffect(() => { audioReactivityRef.current = audioReactivity; }, [audioReactivity]);
+  useEffect(() => { musicRef.current = music; }, [music]);
   const playheadRef = useRef(playheadSecond);
   useEffect(() => { playheadRef.current = playheadSecond; }, [playheadSecond]);
+
+  // Push music volume/mute into the player whenever they change. Sidechain
+  // params are picked up live each frame from musicRef.
+  useEffect(() => {
+    musicPlayerRef.current?.setVolume(music.volume, music.muted || !musicLayerOn);
+    if (!music.sidechain.enabled) {
+      musicPlayerRef.current?.resetDuck();
+      musicDuckGainRef.current = 1;
+    }
+  }, [music.volume, music.muted, music.sidechain.enabled, musicLayerOn]);
 
   // push parameter updates
   useEffect(() => { bgRendererRef.current?.setParams(bg); }, [bg]);
@@ -675,6 +870,8 @@ export const App: React.FC = () => {
           videoRendererRef.current?.setVideo(v);
           videoElRef.current = v;
           mediaElRef.current = v;
+          const src = new AudioSource({ element: v, url });
+          audioSourceRef.current = src;
           v.currentTime = 0;
         });
       }
@@ -698,6 +895,20 @@ export const App: React.FC = () => {
           const src = new AudioSource({ element: a, url });
           audioSourceRef.current = src;
           a.currentTime = 0;
+        });
+      }
+      // load music if present
+      if (proj.hasMusic) {
+        const url = getMusicUrl(id);
+        const m = document.createElement('audio');
+        m.src = url;
+        m.crossOrigin = 'anonymous';
+        m.preload = 'auto';
+        m.loop = true;
+        m.addEventListener('loadedmetadata', () => {
+          setMusicInfo({ name: proj.originalMusicName || 'music' });
+          musicElRef.current = m;
+          musicPlayerRef.current = new MusicPlayer(m);
         });
       }
       // load transcript if present
@@ -753,6 +964,8 @@ export const App: React.FC = () => {
       videoRendererRef.current?.setVideo(v);
       videoElRef.current = v;
       mediaElRef.current = v;
+      const src = new AudioSource({ element: v, url });
+      audioSourceRef.current = src;
       v.currentTime = 0;
     });
     const uploadId = addToast('Importing video into project folder…', 'progress', true);
@@ -825,6 +1038,51 @@ export const App: React.FC = () => {
     });
   };
 
+  const loadMusicFile = (file: File, pid: string) => {
+    setPlaying(false);
+    mediaElRef.current?.pause();
+    musicElRef.current?.pause();
+    musicPlayerRef.current?.dispose();
+    musicPlayerRef.current = null;
+    musicElRef.current = null;
+    setMusicInfo(null);
+    setProjectStatus({ kind: 'progress', message: 'Importing music into project folder', progress: 0, detail: `Folder: projects/${pid}` });
+
+    const url = URL.createObjectURL(file);
+    const m = document.createElement('audio');
+    m.src = url;
+    m.crossOrigin = 'anonymous';
+    m.preload = 'auto';
+    m.loop = true;
+    m.addEventListener('loadedmetadata', () => {
+      setMusicInfo({ name: file.name });
+      musicElRef.current = m;
+      musicPlayerRef.current = new MusicPlayer(m);
+    });
+
+    const uploadId = addToast('Importing music into project folder…', 'progress', true);
+    uploadMusic(pid, file, (pct) => {
+      setProjectStatus({ kind: 'progress', message: 'Importing music into project folder', progress: pct, detail: `Folder: projects/${pid}` });
+      updateToast(uploadId, `Importing… ${pct}%`, 'progress');
+    }).then(() => {
+      setProjectStatus({ kind: 'success', message: 'Music imported', detail: `Folder: projects/${pid}` });
+      updateToast(uploadId, 'Music imported successfully', 'success');
+      listProjects().then(setProjects);
+    }).catch(err => {
+      setProjectStatus({ kind: 'error', message: `Import failed: ${err.message}` });
+      updateToast(uploadId, `Import failed: ${err.message}`, 'error');
+    });
+  };
+
+  const handleClearMusic = () => {
+    musicElRef.current?.pause();
+    musicPlayerRef.current?.dispose();
+    musicPlayerRef.current = null;
+    musicElRef.current = null;
+    setMusicInfo(null);
+    setMusicLayerOn(false);
+  };
+
   const loadFile = (file: File) => {
     const pid = activeProjectIdRef.current;
     if (!pid) {
@@ -849,7 +1107,23 @@ export const App: React.FC = () => {
   };
   const togglePlay = () => {
     const v = mediaElRef.current;
-    if (!v) return;
+    if (!v) {
+      // No speech media — play music standalone if loaded.
+      const m = musicElRef.current;
+      if (m) {
+        if (m.paused) {
+          musicPlayerRef.current?.ensureGraph();
+          musicPlayerRef.current?.resume();
+          musicPlayerRef.current?.setVolume(music.volume, music.muted || !musicLayerOn);
+          m.play().catch(() => {});
+          setPlaying(true);
+        } else {
+          m.pause();
+          setPlaying(false);
+        }
+      }
+      return;
+    }
     const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? v.duration;
     const params = videoInfo ? vidExport : bgExport;
     const { start, end } = resolveExportRange(params, totalDuration);
@@ -857,6 +1131,10 @@ export const App: React.FC = () => {
       // Audio Web Audio context needs to be resumed from a user gesture.
       audioSourceRef.current?.ensureGraph();
       audioSourceRef.current?.resume();
+      // Same for the music graph.
+      musicPlayerRef.current?.ensureGraph();
+      musicPlayerRef.current?.resume();
+      musicPlayerRef.current?.setVolume(music.volume, music.muted || !musicLayerOn);
       const cur = v.currentTime || 0;
       let target = clamp(cur, start, end);
       if (cur >= end - 0.001 || cur < start) target = start;
@@ -864,6 +1142,11 @@ export const App: React.FC = () => {
       const startPlayback = () => {
         const p = v.play();
         if (p && typeof p.catch === 'function') p.catch(() => setPlaying(false));
+        // Start music alongside speech (its own free-running time, looped).
+        const mEl = musicElRef.current;
+        if (mEl && musicLayerOn) {
+          mEl.play().catch(() => {});
+        }
         setPlaying(true);
       };
       if (Math.abs((v.currentTime || 0) - target) > 0.001) {
@@ -875,6 +1158,7 @@ export const App: React.FC = () => {
       }
     } else {
       v.pause();
+      musicElRef.current?.pause();
       setPlaying(false);
     }
   };
@@ -1252,6 +1536,7 @@ export const App: React.FC = () => {
           <LayerToggle label="Background" on={bgLayerOn} onClick={() => setBgLayerOn((v) => !v)} />
           {!audioMode && <LayerToggle label="Video" on={videoLayerOn} onClick={() => setVideoLayerOn((v) => !v)} />}
           <LayerToggle label="Captions" on={captionsLayerOn} onClick={() => setCaptionsLayerOn((v) => !v)} />
+          <LayerToggle label="Music" on={musicLayerOn} onClick={() => setMusicLayerOn((v) => !v)} />
         </div>
 
         {/* guides */}
@@ -1279,6 +1564,7 @@ export const App: React.FC = () => {
             { value: 'background', label: 'Background' },
             { value: 'video',      label: audioMode ? 'Audio' : 'Video' },
             { value: 'reactivity', label: 'Reactivity' },
+            { value: 'music',      label: 'Music' },
             { value: 'export',     label: 'Export' },
           ]}
           value={mainTab}
@@ -1455,6 +1741,22 @@ export const App: React.FC = () => {
               onChange={setAudioReactivity}
               hasAudio={!!audioInfo}
               bandsRef={lastBandsRef}
+            />
+          )}
+
+          {mainTab === 'music' && (
+            <MusicControls
+              value={music}
+              onChange={setMusic}
+              hasMusic={!!musicInfo}
+              musicName={musicInfo?.name ?? null}
+              onPickFile={(f) => {
+                if (activeProjectIdRef.current) loadMusicFile(f, activeProjectIdRef.current);
+                else addToast('Select project first', 'error');
+              }}
+              onClear={handleClearMusic}
+              duckGainRef={musicDuckGainRef}
+              speechRmsRef={speechRmsRef}
             />
           )}
 
