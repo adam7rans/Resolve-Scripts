@@ -26,15 +26,16 @@ import { ProjectBar } from './ProjectBar';
 import { StatusToast, type Toast } from './StatusToast';
 import {
   listProjects, createProject, getProject, saveSettings,
-  uploadVideo, uploadAudio, uploadCaption, uploadMusic,
+  uploadVideo, uploadAudio, uploadCaption, uploadMusic, deleteMusic,
   getVideoUrl, getAudioUrl, getMusicUrl, getTranscript, openEventStream,
   createProjectExport, uploadExportFrame, finishProjectExport,
   type ProjectMeta,
 } from '../lib/projectApi';
 
-type MainTab = 'background' | 'video' | 'reactivity' | 'music' | 'export';
+type MainTab = 'background' | 'video' | 'captions' | 'audio' | 'export';
 type BgSubTab = 'noise' | 'dither';
 type VideoSubTab = 'levels' | 'tone' | 'color' | 'distortion' | 'dither';
+type AudioSubTab = 'reactivity' | 'music';
 
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.aac'];
 function isAudioFile(file: File): boolean {
@@ -337,7 +338,12 @@ const MusicControls: React.FC<{
   duckGainRef: React.MutableRefObject<number>;
   /** Live speech RMS (0..1) for the meter. */
   speechRmsRef: React.MutableRefObject<number>;
-}> = ({ value, onChange, hasMusic, musicName, onPickFile, onClear, duckGainRef, speechRmsRef }) => {
+  /** Volume (0..1) for the main video/audio element. */
+  videoVolume: number;
+  onVideoVolumeChange: (v: number) => void;
+  videoMuted: boolean;
+  onVideoMutedChange: (m: boolean) => void;
+}> = ({ value, onChange, hasMusic, musicName, onPickFile, onClear, duckGainRef, speechRmsRef, videoVolume, onVideoVolumeChange, videoMuted, onVideoMutedChange }) => {
   const set = (patch: Partial<MusicParams>) => onChange({ ...value, ...patch });
   const setSc = (patch: Partial<MusicParams['sidechain']>) =>
     onChange({ ...value, sidechain: { ...value.sidechain, ...patch } });
@@ -352,7 +358,7 @@ const MusicControls: React.FC<{
 
   return (
     <>
-      <Section title="File">
+      <Section title="Music File">
         <input
           ref={fileInputRef}
           type="file"
@@ -394,7 +400,17 @@ const MusicControls: React.FC<{
         )}
       </Section>
 
-      <Section title="Mix">
+      <Section title="Mixer">
+        <div style={{ color: '#888', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Video</div>
+        <Slider
+          label="volume"
+          value={videoVolume}
+          min={0} max={1} step={0.01}
+          onChange={onVideoVolumeChange}
+        />
+        <Toggle label="muted" value={videoMuted} onChange={onVideoMutedChange} />
+        <div style={{ height: 8 }} />
+        <div style={{ color: '#888', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Music</div>
         <Slider
           label="volume"
           value={value.volume}
@@ -445,6 +461,7 @@ export const App: React.FC = () => {
   const [mainTab, setMainTab] = useState<MainTab>('background');
   const [bgSubTab, setBgSubTab] = useState<BgSubTab>('noise');
   const [videoSubTab, setVideoSubTab] = useState<VideoSubTab>('levels');
+  const [audioSubTab, setAudioSubTab] = useState<AudioSubTab>('reactivity');
 
   // visible layers — both can be on at once (video composites over background
   // wherever the video shader's alpha < 1)
@@ -484,6 +501,8 @@ export const App: React.FC = () => {
   const [playing, setPlaying] = useState(false);
   const [playheadSecond, setPlayheadSecond] = useState(0);
   const [muted, setMuted] = useState(false);
+  // Volume for the main video/audio element (the "video" track in the Mixer).
+  const [mediaVolume, setMediaVolume] = useState(1);
 
   // ---------- project management ----------
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
@@ -561,11 +580,25 @@ export const App: React.FC = () => {
         lastBandsRef.current = bands;
         const g = ar.gain;
 
+        // The AnalyserNode's time-domain RMS is much weaker (~0.02 for normal
+        // speech) than its per-band frequency energy (~0.3+). Build a single
+        // "voice intensity" 0..1 signal that captures both: takes whichever
+        // is loudest of (boosted rms, mid band, low band, high band). Mid is
+        // most representative of speech (250 Hz – 2 kHz). This is what we
+        // feed into the brightness modulator and the sidechain ducker so
+        // both react reliably to speech.
+        const voiceIntensity = Math.min(1, Math.max(
+          bands.rms * 4,
+          bands.mid,
+          bands.low * 0.7,
+          bands.high * 0.7,
+        ));
+
         if (bgLayerOnRef.current && bgRendererRef.current) {
           if (audio && ar.enabled) {
             bgRendererRef.current.setModulation({
               speed: bands.rms * g * ar.modSpeed * 1.5,
-              brightness: bands.rms * g * ar.modBrightness,
+              brightness: voiceIntensity * g * ar.modBrightness,
             });
           } else {
             bgRendererRef.current.setModulation({ speed: 0, brightness: 0 });
@@ -576,15 +609,14 @@ export const App: React.FC = () => {
           videoRendererRef.current?.renderFrame();
         }
 
-        // Sidechain: read latest speech RMS (already smoothed) and apply to
-        // the music player's duckGain. Always update so the duck releases back
-        // to 1.0 even when speech is silent.
+        // Sidechain: read latest voice intensity and apply to the music
+        // player's duckGain. Always update so the duck releases back to 1.0
+        // even when speech is silent.
         const player = musicPlayerRef.current;
         if (player) {
           const m = musicRef.current;
-          const rms = bands.rms;
-          speechRmsRef.current = rms;
-          musicDuckGainRef.current = player.applySidechain(rms, m.sidechain);
+          speechRmsRef.current = voiceIntensity;
+          musicDuckGainRef.current = player.applySidechain(voiceIntensity, m.sidechain);
         }
       }
       rafRef.current = requestAnimationFrame(loop);
@@ -637,6 +669,11 @@ export const App: React.FC = () => {
     if (audioElRef.current) audioElRef.current.muted = muted;
     audioSourceRef.current?.setMuted(muted);
   }, [muted]);
+  useEffect(() => {
+    const v = Math.max(0, Math.min(1, mediaVolume));
+    if (videoElRef.current) videoElRef.current.volume = v;
+    if (audioElRef.current) audioElRef.current.volume = v;
+  }, [mediaVolume, videoInfo, audioInfo]);
   useEffect(() => {
     const w = Math.max(1, Math.floor(previewFrame.w));
     const h = Math.max(1, Math.floor(previewFrame.h));
@@ -693,14 +730,14 @@ export const App: React.FC = () => {
     saveTimerRef.current = setTimeout(() => {
       saveSettings(activeProjectId, {
         background: bg, backgroundDither: bgDither, video: vid,
-        audioReactivity,
+        audioReactivity, music,
         captionMode, captionStyle,
-        layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn },
+        layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn, music: musicLayerOn },
         activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
-        ui: { mainTab, bgSubTab, videoSubTab, muted },
+        ui: { mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume },
       }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, audioReactivity, captionMode, captionStyle, bgLayerOn, videoLayerOn, captionsLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, muted]);
+  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, captionMode, captionStyle, bgLayerOn, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume]);
 
   // ---------- SSE stream for transcription progress ----------
   useEffect(() => {
@@ -780,6 +817,7 @@ export const App: React.FC = () => {
       setCaptionMode('line');
       setCaptionStyle(DEFAULT_CAPTION_STYLE);
       setMuted(false);
+      setMediaVolume(1);
       setVideoInfo(null);
       setAudioInfo(null);
       setPlayheadSecond(0);
@@ -794,6 +832,14 @@ export const App: React.FC = () => {
       audioSourceRef.current = null;
       videoRendererRef.current?.setVideo(null);
       setAudioReactivity(DEFAULT_AUDIO_REACTIVITY);
+      // reset music state too
+      musicElRef.current?.pause();
+      musicPlayerRef.current?.dispose();
+      musicPlayerRef.current = null;
+      musicElRef.current = null;
+      setMusicInfo(null);
+      setMusic(DEFAULT_MUSIC_PARAMS);
+      setMusicLayerOn(true);
       setProjectStatus({ kind: 'success', message: `Project "${p.name}" created`, detail: `Folder: projects/${p.id}` });
       addToast(`Project "${p.name}" created`, 'success');
     } catch { addToast('Failed to create project', 'error'); }
@@ -811,6 +857,13 @@ export const App: React.FC = () => {
       audioSourceRef.current?.dispose();
       audioSourceRef.current = null;
       videoRendererRef.current?.setVideo(null);
+      // tear down any music carried over from the previous project — the
+      // loader below will rebuild it from the new project if applicable.
+      musicElRef.current?.pause();
+      musicPlayerRef.current?.dispose();
+      musicPlayerRef.current = null;
+      musicElRef.current = null;
+      setMusicInfo(null);
       setVideoInfo(null);
       setAudioInfo(null);
       setPlayheadSecond(0);
@@ -821,18 +874,41 @@ export const App: React.FC = () => {
       if (proj.video) setVid(proj.video);
       if (proj.audioReactivity) setAudioReactivity({ ...DEFAULT_AUDIO_REACTIVITY, ...proj.audioReactivity });
       else setAudioReactivity(DEFAULT_AUDIO_REACTIVITY);
+      if (proj.music) {
+        setMusic({
+          ...DEFAULT_MUSIC_PARAMS,
+          ...proj.music,
+          sidechain: { ...DEFAULT_MUSIC_PARAMS.sidechain, ...(proj.music.sidechain ?? {}) },
+        });
+      } else {
+        setMusic(DEFAULT_MUSIC_PARAMS);
+      }
       if (proj.captionMode) setCaptionMode(proj.captionMode);
       if (proj.captionStyle) setCaptionStyle({ ...DEFAULT_CAPTION_STYLE, ...proj.captionStyle });
       if (proj.ui) {
-        if (proj.ui.mainTab) setMainTab(proj.ui.mainTab);
+        if (proj.ui.mainTab) {
+          // Migrate legacy tab ids: 'reactivity' and 'music' became sub-tabs of 'audio'.
+          if (proj.ui.mainTab === 'reactivity') {
+            setMainTab('audio');
+            setAudioSubTab('reactivity');
+          } else if (proj.ui.mainTab === 'music') {
+            setMainTab('audio');
+            setAudioSubTab('music');
+          } else {
+            setMainTab(proj.ui.mainTab);
+          }
+        }
         if (proj.ui.bgSubTab) setBgSubTab(proj.ui.bgSubTab);
         if (proj.ui.videoSubTab) setVideoSubTab(proj.ui.videoSubTab);
+        if (proj.ui.audioSubTab) setAudioSubTab(proj.ui.audioSubTab);
         if (typeof proj.ui.muted === 'boolean') setMuted(proj.ui.muted);
+        if (typeof proj.ui.mediaVolume === 'number') setMediaVolume(proj.ui.mediaVolume);
       }
       if (proj.layers) {
         setBgLayerOn(proj.layers.background ?? true);
         setVideoLayerOn(proj.layers.video ?? true);
         setCaptionsLayerOn(proj.layers.captions ?? true);
+        setMusicLayerOn(proj.layers.music ?? true);
       }
       if (proj.activeGuide !== undefined) {
         setActiveGuide(proj.activeGuide as GuideKey | null);
@@ -1021,8 +1097,9 @@ export const App: React.FC = () => {
       a.currentTime = 0;
     });
 
-    // Switch to reactivity tab to show the new audio-reactive UI
-    setMainTab('reactivity');
+    // Switch to audio tab to show the new audio-reactive UI
+    setMainTab('audio');
+    setAudioSubTab('reactivity');
 
     const uploadId = addToast('Importing audio into project folder…', 'progress', true);
     uploadAudio(pid, file, (pct) => {
@@ -1081,6 +1158,14 @@ export const App: React.FC = () => {
     musicElRef.current = null;
     setMusicInfo(null);
     setMusicLayerOn(false);
+    // Also delete the file on disk + clear it from project.json so it doesn't
+    // come back next time the project is opened.
+    const pid = activeProjectIdRef.current;
+    if (pid) {
+      deleteMusic(pid)
+        .then(() => listProjects().then(setProjects))
+        .catch(() => addToast('Failed to remove music file from project', 'error'));
+    }
   };
 
   const loadFile = (file: File) => {
@@ -1385,7 +1470,7 @@ export const App: React.FC = () => {
   const audioMode = !!audioInfo && !videoInfo;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', height: '100vh', minHeight: 0, overflow: 'hidden', gap: 0 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 460px', height: '100vh', minHeight: 0, overflow: 'hidden', gap: 0 }}>
       {/* preview (left) — both layers stacked, toggles control visibility */}
       <div
         ref={previewWrapRef}
@@ -1562,9 +1647,9 @@ export const App: React.FC = () => {
         <TabBar<MainTab>
           tabs={[
             { value: 'background', label: 'Background' },
-            { value: 'video',      label: audioMode ? 'Audio' : 'Video' },
-            { value: 'reactivity', label: 'Reactivity' },
-            { value: 'music',      label: 'Music' },
+            { value: 'video',      label: audioMode ? 'Source' : 'Video' },
+            { value: 'captions',   label: 'Captions' },
+            { value: 'audio',      label: 'Audio' },
             { value: 'export',     label: 'Export' },
           ]}
           value={mainTab}
@@ -1656,42 +1741,6 @@ export const App: React.FC = () => {
                       <input type="file" accept="video/*,audio/*" onChange={onPickFile} style={{ display: 'none' }} />
                     </label>
                   </Section>
-                  <Section title="Captions">
-                    {transcript ? (
-                      <>
-                        <div style={{ color: '#aaa', marginBottom: 6 }}>
-                          {transcriptName}<br />
-                          {transcript.utterances.length} utterance{transcript.utterances.length === 1 ? '' : 's'}
-                        </div>
-                        <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-                          <PillToggle label="Line mode" on={captionMode === 'line'} onClick={() => setCaptionMode('line')} />
-                          <PillToggle label="Word mode" on={captionMode === 'word'} onClick={() => setCaptionMode('word')} />
-                        </div>
-                        <label style={{
-                          display: 'inline-block', padding: '4px 10px', background: '#222',
-                          color: '#ddd', borderRadius: 3, cursor: 'pointer', fontSize: 11,
-                        }}>
-                          Replace caption JSON…
-                          <input type="file" accept="application/json,.json" onChange={onPickTranscript} style={{ display: 'none' }} />
-                        </label>
-                      </>
-                    ) : (
-                      <>
-                        <div style={{ color: '#aaa', marginBottom: 8 }}>
-                          Load a caption JSON (word-level timestamps in ms — same format as
-                          <code> w3rk17/src/content/talk-transcript-trimmed.json</code>).
-                        </div>
-                        <label style={{
-                          display: 'inline-block', padding: '6px 12px', background: '#1f6feb',
-                          color: '#fff', borderRadius: 3, cursor: 'pointer',
-                        }}>
-                          Choose caption JSON…
-                          <input type="file" accept="application/json,.json" onChange={onPickTranscript} style={{ display: 'none' }} />
-                        </label>
-                      </>
-                    )}
-                  </Section>
-                  <CaptionFontControls value={captionStyle} onChange={setCaptionStyle} />
                   {!audioMode && (
                     <>
                       <Section title="Preset">
@@ -1735,29 +1784,86 @@ export const App: React.FC = () => {
             </>
           )}
 
-          {mainTab === 'reactivity' && (
-            <ReactivityControls
-              value={audioReactivity}
-              onChange={setAudioReactivity}
-              hasAudio={!!audioInfo}
-              bandsRef={lastBandsRef}
-            />
+          {mainTab === 'captions' && (
+            <>
+              <Section title="Captions">
+                {transcript ? (
+                  <>
+                    <div style={{ color: '#aaa', marginBottom: 6 }}>
+                      {transcriptName}<br />
+                      {transcript.utterances.length} utterance{transcript.utterances.length === 1 ? '' : 's'}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                      <PillToggle label="Line mode" on={captionMode === 'line'} onClick={() => setCaptionMode('line')} />
+                      <PillToggle label="Word mode" on={captionMode === 'word'} onClick={() => setCaptionMode('word')} />
+                    </div>
+                    <label style={{
+                      display: 'inline-block', padding: '4px 10px', background: '#222',
+                      color: '#ddd', borderRadius: 3, cursor: 'pointer', fontSize: 11,
+                    }}>
+                      Replace caption JSON…
+                      <input type="file" accept="application/json,.json" onChange={onPickTranscript} style={{ display: 'none' }} />
+                    </label>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ color: '#aaa', marginBottom: 8 }}>
+                      Load a caption JSON (word-level timestamps in ms — same format as
+                      <code> w3rk17/src/content/talk-transcript-trimmed.json</code>).
+                    </div>
+                    <label style={{
+                      display: 'inline-block', padding: '6px 12px', background: '#1f6feb',
+                      color: '#fff', borderRadius: 3, cursor: 'pointer',
+                    }}>
+                      Choose caption JSON…
+                      <input type="file" accept="application/json,.json" onChange={onPickTranscript} style={{ display: 'none' }} />
+                    </label>
+                  </>
+                )}
+              </Section>
+              <CaptionFontControls value={captionStyle} onChange={setCaptionStyle} />
+            </>
           )}
 
-          {mainTab === 'music' && (
-            <MusicControls
-              value={music}
-              onChange={setMusic}
-              hasMusic={!!musicInfo}
-              musicName={musicInfo?.name ?? null}
-              onPickFile={(f) => {
-                if (activeProjectIdRef.current) loadMusicFile(f, activeProjectIdRef.current);
-                else addToast('Select project first', 'error');
-              }}
-              onClear={handleClearMusic}
-              duckGainRef={musicDuckGainRef}
-              speechRmsRef={speechRmsRef}
-            />
+          {mainTab === 'audio' && (
+            <>
+              <TabBar<AudioSubTab>
+                tabs={[
+                  { value: 'reactivity', label: 'Reactivity' },
+                  { value: 'music',      label: 'Mixer' },
+                ]}
+                value={audioSubTab}
+                onChange={setAudioSubTab}
+                variant="sub"
+              />
+              {audioSubTab === 'reactivity' && (
+                <ReactivityControls
+                  value={audioReactivity}
+                  onChange={setAudioReactivity}
+                  hasAudio={!!audioInfo}
+                  bandsRef={lastBandsRef}
+                />
+              )}
+              {audioSubTab === 'music' && (
+                <MusicControls
+                  value={music}
+                  onChange={setMusic}
+                  hasMusic={!!musicInfo}
+                  musicName={musicInfo?.name ?? null}
+                  onPickFile={(f) => {
+                    if (activeProjectIdRef.current) loadMusicFile(f, activeProjectIdRef.current);
+                    else addToast('Select project first', 'error');
+                  }}
+                  onClear={handleClearMusic}
+                  duckGainRef={musicDuckGainRef}
+                  speechRmsRef={speechRmsRef}
+                  videoVolume={mediaVolume}
+                  onVideoVolumeChange={setMediaVolume}
+                  videoMuted={muted}
+                  onVideoMutedChange={setMuted}
+                />
+              )}
+            </>
           )}
 
           {mainTab === 'export' && (

@@ -327,6 +327,22 @@ app.post('/api/projects/:id/music', musicUpload.single('music'), (req, res) => {
   res.json({ ok: true, filename: req.file.filename, originalName: req.file.originalname });
 });
 
+// Delete the project's music file (if any) and clear it from project.json.
+app.delete('/api/projects/:id/music', (req, res) => {
+  const id = req.params.id;
+  const proj = readProject(id);
+  if (!proj) return void res.status(404).json({ error: 'Not found' });
+
+  if (proj.musicFile) {
+    try { fs.unlinkSync(path.join(projectDir(id), proj.musicFile)); } catch {}
+    delete proj.musicFile;
+    delete proj.originalMusicName;
+    proj.updatedAt = new Date().toISOString();
+    writeProject(id, proj);
+  }
+  res.json({ ok: true });
+});
+
 // Serve music with range-request support (same MIME table as audio).
 app.get('/api/projects/:id/music', (req, res) => {
   const proj = readProject(req.params.id);

@@ -99,8 +99,8 @@ export class MusicPlayer {
     // as speech approaches full volume. Linear above threshold.
     let target = 1.0;
     if (p.enabled) {
-      // Speech RMS typically maxes out around 0.2-0.3. Normalize it so it reaches 1.0.
-      const normalizedRms = Math.min(1, speechRms * 4);
+      // `speechRms` is expected to be a normalized 0..1 voice intensity.
+      const normalizedRms = Math.min(1, Math.max(0, speechRms));
       if (normalizedRms > p.threshold) {
         const over = normalizedRms - p.threshold;
         // Scale 'over' heavily so crossing the threshold causes significant ducking

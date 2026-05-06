@@ -135,6 +135,10 @@ export function getMusicUrl(id: string): string {
   return `${BASE}/projects/${id}/music`;
 }
 
+export async function deleteMusic(id: string): Promise<void> {
+  await fetch(`${BASE}/projects/${id}/music`, { method: 'DELETE' });
+}
+
 export async function uploadMusic(
   id: string,
   file: File,
