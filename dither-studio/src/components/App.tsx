@@ -327,6 +327,66 @@ const BandMeter: React.FC<{ label: string; value: number }> = ({ label, value })
   );
 };
 
+/** Compact mute-icon + volume slider row used in the Mixer. */
+const VolumeRow: React.FC<{
+  volume: number;
+  muted: boolean;
+  onVolumeChange: (v: number) => void;
+  onMutedChange: (m: boolean) => void;
+}> = ({ volume, muted, onVolumeChange, onMutedChange }) => {
+  const isSilent = muted || volume <= 0;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <button
+        type="button"
+        onClick={() => onMutedChange(!muted)}
+        title={muted ? 'Unmute' : 'Mute'}
+        style={{
+          width: 28, height: 24, padding: 0, display: 'inline-flex',
+          alignItems: 'center', justifyContent: 'center',
+          background: '#1a1a1a', color: isSilent ? '#888' : '#ddd',
+          border: '1px solid #2a2a2a', borderRadius: 3, cursor: 'pointer',
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" strokeWidth="2"
+             strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="currentColor" />
+          {isSilent ? (
+            <>
+              <line x1="23" y1="9" x2="17" y2="15" />
+              <line x1="17" y1="9" x2="23" y2="15" />
+            </>
+          ) : (
+            <>
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+            </>
+          )}
+        </svg>
+      </button>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.01}
+        value={volume}
+        onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+        style={{ flex: 1 }}
+      />
+      <input
+        type="number"
+        step={0.01}
+        min={0}
+        max={1}
+        value={Number.isFinite(volume) ? Number(volume.toFixed(2)) : 0}
+        onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+        style={{ width: 50, background: '#0a0a0a', color: '#ddd', border: '1px solid #333', padding: '2px 4px' }}
+      />
+    </div>
+  );
+};
+
 const MusicControls: React.FC<{
   value: MusicParams;
   onChange: (v: MusicParams) => void;
@@ -401,23 +461,20 @@ const MusicControls: React.FC<{
       </Section>
 
       <Section title="Mixer">
-        <div style={{ color: '#888', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Video</div>
-        <Slider
-          label="volume"
-          value={videoVolume}
-          min={0} max={1} step={0.01}
-          onChange={onVideoVolumeChange}
+        <div style={{ color: '#888', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>Video</div>
+        <VolumeRow
+          volume={videoVolume}
+          muted={videoMuted}
+          onVolumeChange={onVideoVolumeChange}
+          onMutedChange={onVideoMutedChange}
         />
-        <Toggle label="muted" value={videoMuted} onChange={onVideoMutedChange} />
-        <div style={{ height: 8 }} />
-        <div style={{ color: '#888', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>Music</div>
-        <Slider
-          label="volume"
-          value={value.volume}
-          min={0} max={1} step={0.01}
-          onChange={(volume) => set({ volume })}
+        <div style={{ color: '#888', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, marginTop: 6 }}>Music</div>
+        <VolumeRow
+          volume={value.volume}
+          muted={value.muted}
+          onVolumeChange={(volume) => set({ volume })}
+          onMutedChange={(muted) => set({ muted })}
         />
-        <Toggle label="muted" value={value.muted} onChange={(muted) => set({ muted })} />
       </Section>
 
       <Section title="Sidechain (speech ducks music)">
@@ -461,7 +518,7 @@ export const App: React.FC = () => {
   const [mainTab, setMainTab] = useState<MainTab>('background');
   const [bgSubTab, setBgSubTab] = useState<BgSubTab>('noise');
   const [videoSubTab, setVideoSubTab] = useState<VideoSubTab>('levels');
-  const [audioSubTab, setAudioSubTab] = useState<AudioSubTab>('reactivity');
+  const [audioSubTab, setAudioSubTab] = useState<AudioSubTab>('music');
 
   // visible layers — both can be on at once (video composites over background
   // wherever the video shader's alpha < 1)
@@ -1829,8 +1886,8 @@ export const App: React.FC = () => {
             <>
               <TabBar<AudioSubTab>
                 tabs={[
-                  { value: 'reactivity', label: 'Reactivity' },
                   { value: 'music',      label: 'Mixer' },
+                  { value: 'reactivity', label: 'Reactivity' },
                 ]}
                 value={audioSubTab}
                 onChange={setAudioSubTab}
