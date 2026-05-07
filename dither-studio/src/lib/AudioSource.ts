@@ -23,6 +23,36 @@ export interface AudioBands {
   high: number;
 }
 
+/**
+ * Parameters for the video/speech limiter chain. Implemented as
+ *   inputGain → DynamicsCompressorNode (limiter settings) → outputGain
+ * inserted between the source and the rest of the graph. When disabled the
+ * chain becomes unity (compressor threshold pushed to 0 dB, ratio 1).
+ */
+export interface LimiterParams {
+  enabled: boolean;
+  /** Pre-compressor boost in dB. Use this to drive a quiet voice into the limiter. */
+  inputGainDb: number;
+  /** Compressor threshold in dB (-60..0). Anything above is limited. */
+  thresholdDb: number;
+  /** Release time in seconds (0.05..1.0). */
+  releaseSec: number;
+  /** Post-compressor make-up gain in dB. */
+  outputGainDb: number;
+}
+
+export const DEFAULT_LIMITER: LimiterParams = {
+  enabled: false,
+  inputGainDb: 0,
+  thresholdDb: -6,
+  releaseSec: 0.25,
+  outputGainDb: 0,
+};
+
+function dbToLin(db: number): number {
+  return Math.pow(10, db / 20);
+}
+
 export interface AudioSourceOptions {
   /** Media element used for live playback (created/managed externally). */
   element: HTMLMediaElement;
@@ -41,6 +71,10 @@ export class AudioSource {
   private analyser: AnalyserNode | null = null;
   private srcNode: MediaElementAudioSourceNode | null = null;
   private gainNode: GainNode | null = null;
+  private limiterIn: GainNode | null = null;
+  private limiterComp: DynamicsCompressorNode | null = null;
+  private limiterOut: GainNode | null = null;
+  private limiterParams: LimiterParams = { ...DEFAULT_LIMITER };
   private timeData = new Uint8Array(TIME_DOMAIN_BYTES);
   private freqData = new Uint8Array(FREQ_BIN_COUNT);
 
@@ -64,19 +98,68 @@ export class AudioSource {
     const Ctx = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
     const ctx = new Ctx();
     const src = ctx.createMediaElementSource(this.element);
+    const limiterIn = ctx.createGain();
+    const comp = ctx.createDynamicsCompressor();
+    const limiterOut = ctx.createGain();
     const gain = ctx.createGain();
     const analyser = ctx.createAnalyser();
     analyser.fftSize = FFT_SIZE;
     analyser.smoothingTimeConstant = 0.4;
 
-    src.connect(gain);
+    // Limiter graph (always in the chain; bypassed by neutralizing the
+    // compressor + gains when disabled). Order: src → limiterIn → comp →
+    // limiterOut → gain (mute) → analyser (post-fx) → destination.
+    src.connect(limiterIn);
+    limiterIn.connect(comp);
+    comp.connect(limiterOut);
+    limiterOut.connect(gain);
     gain.connect(analyser);
     analyser.connect(ctx.destination);
 
     this.ctx = ctx;
     this.srcNode = src;
     this.gainNode = gain;
+    this.limiterIn = limiterIn;
+    this.limiterComp = comp;
+    this.limiterOut = limiterOut;
     this.analyser = analyser;
+    // Apply current limiter params (in case setLimiter was called pre-graph).
+    this.applyLimiterParams();
+  }
+
+  setLimiter(p: LimiterParams) {
+    this.limiterParams = { ...p };
+    this.applyLimiterParams();
+  }
+
+  private applyLimiterParams() {
+    const { limiterIn, limiterComp, limiterOut } = this;
+    if (!limiterIn || !limiterComp || !limiterOut || !this.ctx) return;
+    const p = this.limiterParams;
+    const now = this.ctx.currentTime;
+    if (p.enabled) {
+      limiterIn.gain.setTargetAtTime(dbToLin(p.inputGainDb), now, 0.01);
+      limiterComp.threshold.setTargetAtTime(p.thresholdDb, now, 0.01);
+      limiterComp.knee.setTargetAtTime(0, now, 0.01);
+      limiterComp.ratio.setTargetAtTime(20, now, 0.01); // limiter behavior
+      limiterComp.attack.setTargetAtTime(0.003, now, 0.01);
+      limiterComp.release.setTargetAtTime(Math.max(0.01, p.releaseSec), now, 0.01);
+      limiterOut.gain.setTargetAtTime(dbToLin(p.outputGainDb), now, 0.01);
+    } else {
+      // Bypass: unity in/out, compressor neutered (threshold 0 dB, ratio 1).
+      limiterIn.gain.setTargetAtTime(1, now, 0.01);
+      limiterComp.threshold.setTargetAtTime(0, now, 0.01);
+      limiterComp.knee.setTargetAtTime(0, now, 0.01);
+      limiterComp.ratio.setTargetAtTime(1, now, 0.01);
+      limiterComp.attack.setTargetAtTime(0.003, now, 0.01);
+      limiterComp.release.setTargetAtTime(0.25, now, 0.01);
+      limiterOut.gain.setTargetAtTime(1, now, 0.01);
+    }
+  }
+
+  /** Live gain reduction (dB, ≤ 0) from the compressor. */
+  getLimiterReductionDb(): number {
+    return this.limiterComp ? this.limiterComp.reduction : 0;
   }
 
   /** Resume the AudioContext if it's suspended (must follow a user gesture). */
@@ -243,12 +326,18 @@ export class AudioSource {
 
   dispose() {
     try { this.srcNode?.disconnect(); } catch {}
+    try { this.limiterIn?.disconnect(); } catch {}
+    try { this.limiterComp?.disconnect(); } catch {}
+    try { this.limiterOut?.disconnect(); } catch {}
     try { this.gainNode?.disconnect(); } catch {}
     try { this.analyser?.disconnect(); } catch {}
     if (this.ctx) this.ctx.close().catch(() => {});
     this.ctx = null;
     this.srcNode = null;
     this.gainNode = null;
+    this.limiterIn = null;
+    this.limiterComp = null;
+    this.limiterOut = null;
     this.analyser = null;
     this.buffer = null;
     this.envelope = null;

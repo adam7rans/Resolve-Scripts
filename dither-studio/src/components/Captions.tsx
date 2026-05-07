@@ -21,6 +21,22 @@ interface CaptionsProps {
 const isWordActive = (w: TranscriptWord, ms: number) =>
   ms >= (w.start ?? 0) && ms <= (w.end ?? w.start ?? 0);
 
+/**
+ * Split a token into [leadingPunct, body, trailingPunct]. The body is the
+ * actual word that should ever receive highlight/underline; the punctuation
+ * around it stays dim and undecorated. If the entire token is punctuation
+ * (e.g. "—"), it is returned entirely as the leading part.
+ */
+const splitWordParts = (text: string): { lead: string; body: string; trail: string } => {
+  const m = /^(\p{P}*)(.*?)(\p{P}*)$/u.exec(text);
+  if (!m) return { lead: '', body: text, trail: '' };
+  let [, lead, body, trail] = m;
+  // Tokens that are entirely punctuation: keep them as the leading part with
+  // no body so the highlight/underline path renders nothing for them.
+  if (!body) return { lead: text, body: '', trail: '' };
+  return { lead: lead ?? '', body, trail: trail ?? '' };
+};
+
 export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DEFAULT_CAPTION_STYLE, frame, timeSourceRef }) => {
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const rafRef = useRef<number | null>(null);
@@ -92,7 +108,10 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
       setWordText('');
       return;
     }
-    const next = activeWord?.text ?? '';
+    // word mode: strip surrounding punctuation so only the actual word is
+    // shown (matches the "no highlight on punctuation" rule used in line mode).
+    const raw = activeWord?.text ?? '';
+    const next = raw ? splitWordParts(raw).body || raw : '';
     if (next) {
       setWordText(next);
       const id = requestAnimationFrame(() => setWordVisible(true));
@@ -203,35 +222,52 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
                 : '0%';
               const drawOpacity = underlineMode === 'fade' ? fadeAlpha : 1;
 
+              const { lead, body, trail } = splitWordParts(w.text);
+              const dimColor = captionStyle.wordHighlightEnabled
+                ? captionStyle.dimColor
+                : captionStyle.color;
+              const bodyColor = captionStyle.wordHighlightEnabled
+                ? (highlighted ? captionStyle.color : captionStyle.dimColor)
+                : captionStyle.color;
+
               return (
-                <span
-                  key={i}
-                  style={{
-                    position: 'relative',
-                    display: 'inline-block',
-                    color: captionStyle.wordHighlightEnabled ? (highlighted ? captionStyle.color : captionStyle.dimColor) : captionStyle.color,
-                    transition: 'color 200ms ease',
-                    paddingBottom: 2,
-                  }}
-                >
-                  {w.text}
-                  <span
-                    aria-hidden
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      bottom: 0,
-                      height: 2,
-                      width: drawWidth,
-                      background: captionStyle.color,
-                      opacity: drawOpacity,
-                      transition:
-                        underlineMode === 'draw'
-                          ? 'width 100ms linear'
-                          : `opacity ${FADE_MS}ms ease`,
-                      pointerEvents: 'none',
-                    }}
-                  />
+                <span key={i} style={{ display: 'inline' }}>
+                  {lead && (
+                    <span style={{ color: dimColor }}>{lead}</span>
+                  )}
+                  {body && (
+                    <span
+                      style={{
+                        position: 'relative',
+                        display: 'inline-block',
+                        color: bodyColor,
+                        transition: 'color 200ms ease',
+                        paddingBottom: 2,
+                      }}
+                    >
+                      {body}
+                      <span
+                        aria-hidden
+                        style={{
+                          position: 'absolute',
+                          left: 0,
+                          bottom: 0,
+                          height: 2,
+                          width: drawWidth,
+                          background: captionStyle.color,
+                          opacity: drawOpacity,
+                          transition:
+                            underlineMode === 'draw'
+                              ? 'width 100ms linear'
+                              : `opacity ${FADE_MS}ms ease`,
+                          pointerEvents: 'none',
+                        }}
+                      />
+                    </span>
+                  )}
+                  {trail && (
+                    <span style={{ color: dimColor }}>{trail}</span>
+                  )}
                 </span>
               );
             }).reduce<React.ReactNode[]>((acc, el, idx) => {

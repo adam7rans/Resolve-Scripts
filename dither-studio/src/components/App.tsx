@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BackgroundRenderer } from '../lib/BackgroundRenderer';
 import { VideoRenderer } from '../lib/VideoRenderer';
-import { AudioSource, type AudioBands } from '../lib/AudioSource';
+import { AudioSource, type AudioBands, type LimiterParams, DEFAULT_LIMITER } from '../lib/AudioSource';
 import { MusicPlayer, DEFAULT_MUSIC_PARAMS, type MusicParams } from '../lib/MusicPlayer';
 import {
   DEFAULT_BACKGROUND, DEFAULT_DITHER, DEFAULT_VIDEO, DEFAULT_EXPORT,
@@ -387,6 +387,8 @@ const VolumeRow: React.FC<{
   );
 };
 
+type FxSubTab = 'sidechain' | 'limiter';
+
 const MusicControls: React.FC<{
   value: MusicParams;
   onChange: (v: MusicParams) => void;
@@ -403,10 +405,18 @@ const MusicControls: React.FC<{
   onVideoVolumeChange: (v: number) => void;
   videoMuted: boolean;
   onVideoMutedChange: (m: boolean) => void;
-}> = ({ value, onChange, hasMusic, musicName, onPickFile, onClear, duckGainRef, speechRmsRef, videoVolume, onVideoVolumeChange, videoMuted, onVideoMutedChange }) => {
+  /** Limiter on the main video/audio element. */
+  limiter: LimiterParams;
+  onLimiterChange: (v: LimiterParams) => void;
+  /** Live limiter gain reduction (dB, ≤ 0) for the meter. */
+  limiterReductionRef: React.MutableRefObject<number>;
+}> = ({ value, onChange, hasMusic, musicName, onPickFile, onClear, duckGainRef, speechRmsRef, videoVolume, onVideoVolumeChange, videoMuted, onVideoMutedChange, limiter, onLimiterChange, limiterReductionRef }) => {
   const set = (patch: Partial<MusicParams>) => onChange({ ...value, ...patch });
   const setSc = (patch: Partial<MusicParams['sidechain']>) =>
     onChange({ ...value, sidechain: { ...value.sidechain, ...patch } });
+  const setLim = (patch: Partial<LimiterParams>) =>
+    onLimiterChange({ ...limiter, ...patch });
+  const [fxTab, setFxTab] = useState<FxSubTab>('sidechain');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Re-render at ~30fps so the live meters update.
@@ -477,38 +487,86 @@ const MusicControls: React.FC<{
         />
       </Section>
 
-      <Section title="Sidechain (speech ducks music)">
-        <Toggle label="enabled" value={value.sidechain.enabled} onChange={(enabled) => setSc({ enabled })} />
-        <Slider
-          label="threshold"
-          value={value.sidechain.threshold}
-          min={0} max={1} step={0.01}
-          onChange={(threshold) => setSc({ threshold })}
-        />
-        <Slider
-          label="amount"
-          value={value.sidechain.amount}
-          min={0} max={1} step={0.01}
-          onChange={(amount) => setSc({ amount })}
-        />
-        <Slider
-          label="attack ms"
-          value={value.sidechain.attackMs}
-          min={5} max={500} step={5}
-          ticks={[50, 100, 200]}
-          onChange={(attackMs) => setSc({ attackMs: Math.round(attackMs) })}
-        />
-        <Slider
-          label="release ms"
-          value={value.sidechain.releaseMs}
-          min={20} max={2000} step={10}
-          ticks={[200, 500, 1000]}
-          onChange={(releaseMs) => setSc({ releaseMs: Math.round(releaseMs) })}
-        />
-        <BandMeter label="speech" value={speechRmsRef.current} />
-        {/* duck gain is 0..1 where 1 = no ducking; show as inverted "ducking %" */}
-        <BandMeter label="duck" value={1 - duckGainRef.current} />
-      </Section>
+      <TabBar<FxSubTab>
+        tabs={[
+          { value: 'sidechain', label: 'Sidechain' },
+          { value: 'limiter',   label: 'Limiter' },
+        ]}
+        value={fxTab}
+        onChange={setFxTab}
+        variant="sub"
+      />
+
+      {fxTab === 'sidechain' && (
+        <Section title="Sidechain (speech ducks music)">
+          <Toggle label="enabled" value={value.sidechain.enabled} onChange={(enabled) => setSc({ enabled })} />
+          <Slider
+            label="threshold"
+            value={value.sidechain.threshold}
+            min={0} max={1} step={0.01}
+            onChange={(threshold) => setSc({ threshold })}
+          />
+          <Slider
+            label="amount"
+            value={value.sidechain.amount}
+            min={0} max={1} step={0.01}
+            onChange={(amount) => setSc({ amount })}
+          />
+          <Slider
+            label="attack ms"
+            value={value.sidechain.attackMs}
+            min={5} max={500} step={5}
+            ticks={[50, 100, 200]}
+            onChange={(attackMs) => setSc({ attackMs: Math.round(attackMs) })}
+          />
+          <Slider
+            label="release ms"
+            value={value.sidechain.releaseMs}
+            min={20} max={2000} step={10}
+            ticks={[200, 500, 1000]}
+            onChange={(releaseMs) => setSc({ releaseMs: Math.round(releaseMs) })}
+          />
+          <BandMeter label="speech" value={speechRmsRef.current} />
+          {/* duck gain is 0..1 where 1 = no ducking; show as inverted "ducking %" */}
+          <BandMeter label="duck" value={1 - duckGainRef.current} />
+        </Section>
+      )}
+
+      {fxTab === 'limiter' && (
+        <Section title="Limiter (boosts video/voice)">
+          <Toggle label="enabled" value={limiter.enabled} onChange={(enabled) => setLim({ enabled })} />
+          <Slider
+            label="input dB"
+            value={limiter.inputGainDb}
+            min={-12} max={24} step={0.5}
+            ticks={[0, 6, 12, 18]}
+            onChange={(inputGainDb) => setLim({ inputGainDb })}
+          />
+          <Slider
+            label="threshold dB"
+            value={limiter.thresholdDb}
+            min={-30} max={0} step={0.5}
+            ticks={[-24, -12, -6]}
+            onChange={(thresholdDb) => setLim({ thresholdDb })}
+          />
+          <Slider
+            label="release ms"
+            value={Math.round(limiter.releaseSec * 1000)}
+            min={50} max={1000} step={10}
+            ticks={[100, 250, 500]}
+            onChange={(ms) => setLim({ releaseSec: Math.max(0.05, ms / 1000) })}
+          />
+          <Slider
+            label="output dB"
+            value={limiter.outputGainDb}
+            min={-12} max={12} step={0.5}
+            ticks={[-6, 0, 6]}
+            onChange={(outputGainDb) => setLim({ outputGainDb })}
+          />
+          {/* gain reduction: 0 dB at rest, negative when limiting; show as 0..1 magnitude. */}
+          <BandMeter label="reduction" value={Math.min(1, Math.max(0, -limiterReductionRef.current / 12))} />
+        </Section>
+      )}
     </>
   );
 };
@@ -560,6 +618,9 @@ export const App: React.FC = () => {
   const [muted, setMuted] = useState(false);
   // Volume for the main video/audio element (the "video" track in the Mixer).
   const [mediaVolume, setMediaVolume] = useState(1);
+  // Limiter / boost on the main media element's audio path.
+  const [limiter, setLimiter] = useState<LimiterParams>(DEFAULT_LIMITER);
+  const limiterReductionRef = useRef(0);
 
   // ---------- project management ----------
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
@@ -675,6 +736,9 @@ export const App: React.FC = () => {
           speechRmsRef.current = voiceIntensity;
           musicDuckGainRef.current = player.applySidechain(voiceIntensity, m.sidechain);
         }
+
+        // Live limiter gain-reduction meter (always 0 when bypassed).
+        if (audio) limiterReductionRef.current = audio.getLimiterReductionDb();
       }
       rafRef.current = requestAnimationFrame(loop);
     };
@@ -732,6 +796,9 @@ export const App: React.FC = () => {
     if (audioElRef.current) audioElRef.current.volume = v;
   }, [mediaVolume, videoInfo, audioInfo]);
   useEffect(() => {
+    audioSourceRef.current?.setLimiter(limiter);
+  }, [limiter, videoInfo, audioInfo]);
+  useEffect(() => {
     const w = Math.max(1, Math.floor(previewFrame.w));
     const h = Math.max(1, Math.floor(previewFrame.h));
     bgRendererRef.current?.setSize(w, h);
@@ -787,14 +854,14 @@ export const App: React.FC = () => {
     saveTimerRef.current = setTimeout(() => {
       saveSettings(activeProjectId, {
         background: bg, backgroundDither: bgDither, video: vid,
-        audioReactivity, music,
+        audioReactivity, music, limiter,
         captionMode, captionStyle,
         layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn, music: musicLayerOn },
         activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
         ui: { mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume },
       }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, captionMode, captionStyle, bgLayerOn, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume]);
+  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, bgLayerOn, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume]);
 
   // ---------- SSE stream for transcription progress ----------
   useEffect(() => {
@@ -896,6 +963,7 @@ export const App: React.FC = () => {
       musicElRef.current = null;
       setMusicInfo(null);
       setMusic(DEFAULT_MUSIC_PARAMS);
+      setLimiter(DEFAULT_LIMITER);
       setMusicLayerOn(true);
       setProjectStatus({ kind: 'success', message: `Project "${p.name}" created`, detail: `Folder: projects/${p.id}` });
       addToast(`Project "${p.name}" created`, 'success');
@@ -940,6 +1008,8 @@ export const App: React.FC = () => {
       } else {
         setMusic(DEFAULT_MUSIC_PARAMS);
       }
+      if (proj.limiter) setLimiter({ ...DEFAULT_LIMITER, ...proj.limiter });
+      else setLimiter(DEFAULT_LIMITER);
       if (proj.captionMode) setCaptionMode(proj.captionMode);
       if (proj.captionStyle) setCaptionStyle({ ...DEFAULT_CAPTION_STYLE, ...proj.captionStyle });
       if (proj.ui) {
@@ -1918,6 +1988,9 @@ export const App: React.FC = () => {
                   onVideoVolumeChange={setMediaVolume}
                   videoMuted={muted}
                   onVideoMutedChange={setMuted}
+                  limiter={limiter}
+                  onLimiterChange={setLimiter}
+                  limiterReductionRef={limiterReductionRef}
                 />
               )}
             </>
