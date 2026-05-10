@@ -218,8 +218,10 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#888' }}>
         <span>view {fmt(viewStart)} – {fmt(viewEnd)} ({fmt(viewSpan)})</span>
-        <span style={{ color: '#ddd' }}>{fmt(playhead)}</span>
-        <span>export {fmt(start)} → {fmt(end)} ({fmt(end - start)})</span>
+        <span style={{ color: '#ddd' }}>
+          {fmt(playhead)} <span style={{ color: '#888' }}>· range {fmt(end - start)}</span>
+        </span>
+        <span>export {fmt(start)} → {fmt(end)}</span>
       </div>
 
       {/* range track */}
