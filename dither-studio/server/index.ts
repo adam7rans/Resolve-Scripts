@@ -4,7 +4,12 @@ import cors from 'cors';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { runTranscriptionPipeline, runAudioTranscriptionPipeline, type TranscribeEvent } from './transcribe.js';
+import type { Project, Settings } from './types';
+
+const execAsync = promisify(exec);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECTS_DIR = path.resolve(__dirname, '../../projects');
@@ -57,11 +62,140 @@ function uniqueSlug(base: string): string {
 }
 function projectDir(id: string) { return path.join(PROJECTS_DIR, id); }
 function exportDir(id: string, exportId: string) { return path.join(projectDir(id), 'exports', exportId); }
-function readProject(id: string): any | null {
+
+/**
+ * Stitch PNG sequence into an MP4 using FFMPEG.
+ * Includes project audio/video-audio and backing music if available.
+ */
+async function stitchVideo(projectId: string, exportId: string) {
+  const proj = readProject(projectId);
+  if (!proj) return null;
+  const settings = readSettings(projectId, proj);
+  const dir = exportDir(projectId, exportId);
+  const manifestPath = path.join(dir, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) return null;
+
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  const { prefix, fps, startTime, duration } = manifest;
+
+  const outPath = path.join(dir, `${prefix || 'video'}.mp4`);
+  const pattern = path.join(dir, `${prefix ? prefix + '_' : '_'}%05d.png`);
+
+  // Build FFMPEG command
+  // Input 0: PNG sequence
+  let inputs = `-framerate ${fps} -i "${pattern}"`;
+  let filterComplex = '';
+  let audioMap = '';
+
+  const audioSources: { path: string; volume: number }[] = [];
+  const pDir = projectDir(projectId);
+
+  // Source 1: Main audio (from video or audio file)
+  const mainAudioFile = proj.audioFile || proj.videoFile;
+  if (mainAudioFile && fs.existsSync(path.join(pDir, mainAudioFile))) {
+    const vol = typeof settings?.ui?.mediaVolume === 'number' ? settings.ui.mediaVolume : 1;
+    audioSources.push({ path: path.join(pDir, mainAudioFile), volume: vol });
+  }
+
+  // Source 2: Backing music
+  if (proj.musicFile) {
+    const musicPath = path.join(pDir, proj.musicFile);
+    const exists = fs.existsSync(musicPath);
+    const musicVol = typeof settings?.music?.volume === 'number' ? settings.music.volume : 0.5;
+    const musicLayerOn = settings?.layers?.music !== false;
+    
+    console.log(`[export] Music check: file=${proj.musicFile}, exists=${exists}, volume=${musicVol}, layerOn=${musicLayerOn}`);
+    
+    if (exists && musicLayerOn) {
+      audioSources.push({ path: musicPath, volume: musicVol });
+    }
+  }
+
+  if (audioSources.length > 0) {
+    audioSources.forEach((src, i) => {
+      const isMusic = i > 0; // The first source is always the main audio/video
+      const loopStr = isMusic ? '-stream_loop -1 ' : '';
+      const ssStr = isMusic ? '' : `-ss ${startTime || 0} `;
+      inputs += ` ${loopStr}${ssStr}-t ${duration || 0} -i "${src.path}"`;
+    });
+
+    if (audioSources.length === 1) {
+      const vol = audioSources[0].volume;
+      if (vol !== 1) {
+        filterComplex = ` -filter_complex "[1:a]volume=${vol.toFixed(2)}[aout]"`;
+        audioMap = '-map 0:v -map "[aout]"';
+      } else {
+        audioMap = '-map 0:v -map 1:a';
+      }
+    } else {
+      // Mix multiple audio sources with volumes and sidechain ducking (speech ducks music)
+      // Input 1: Main Audio (speech)
+      // Input 2: Background Music
+      const sc = settings?.music?.sidechain;
+      const scEnabled = sc?.enabled !== false;
+      const threshold = sc?.threshold ?? 0.1;
+      const ratio = 1.0 / (1.0 - (sc?.amount ?? 0.5)); // Map 0..1 amount to compression ratio
+      const attack = sc?.attackMs ?? 80;
+      const release = sc?.releaseMs ?? 350;
+
+      // Filter:
+      // 1. Set individual volumes
+      // 2. Sidechain compress Input 2 using Input 1 as trigger
+      // 3. Mix the results
+      // 1. Set individual volumes and apply the Speech Limiter (matching AudioSource.ts)
+      const lim = settings?.limiter;
+      const limEnabled = lim?.enabled !== false;
+      const limIn = limEnabled ? Math.pow(10, (lim?.inputGainDb ?? 0) / 20) : 1;
+      const limThresh = limEnabled ? Math.max(0.063, Math.pow(10, (lim?.thresholdDb ?? -6) / 20)) : 1;
+      const limOut = limEnabled ? Math.pow(10, (lim?.outputGainDb ?? 0) / 20) : 1;
+      const limRelease = lim?.releaseSec ?? 0.25;
+
+      // Filter:
+      // a. Process speech: volume -> limiter (if enabled)
+      filterComplex = `[1:a]volume=${(audioSources[0].volume * limIn).toFixed(2)}`;
+      if (limEnabled) {
+        // alimiter: level_in is 1 because we applied limIn already.
+        // limit is the threshold.
+        filterComplex += `,alimiter=level_in=1:level_out=1:limit=${limThresh.toFixed(3)}:attack=5:release=${(limRelease * 1000).toFixed(0)}`;
+      }
+      filterComplex += `,volume=${limOut.toFixed(2)},asplit=2[speech_trigger][speech_mix];`;
+
+      // b. Process music: volume -> sidechain ducking
+      filterComplex += `[2:a]volume=${audioSources[1].volume.toFixed(2)}[music_raw];`;
+      
+      if (scEnabled) {
+        // sidechaincompress: music is compressed by speech
+        filterComplex += `[music_raw][speech_trigger]sidechaincompress=threshold=${threshold}:ratio=${ratio.toFixed(2)}:attack=${attack}:release=${release}[music_ducked];`;
+        filterComplex += `[speech_mix][music_ducked]amix=inputs=2:duration=first:dropout_transition=0,volume=2,alimiter=limit=0.9[aout]`;
+      } else {
+        filterComplex += `[speech_mix][music_raw]amix=inputs=2:duration=first:dropout_transition=0,volume=2,alimiter=limit=0.9[aout]`;
+      }
+
+      filterComplex = ` -filter_complex "${filterComplex}"`;
+      audioMap = '-map 0:v -map "[aout]"';
+    }
+  } else {
+    audioMap = '-map 0:v';
+  }
+
+  // -c:v libx264 -pix_fmt yuv420p is the most compatible for social media.
+  const cmd = `ffmpeg -y ${inputs}${filterComplex} ${audioMap} -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outPath}"`;
+
+  console.log(`[export] Stitching video: ${cmd}`);
+  try {
+    await execAsync(cmd);
+    console.log(`[export] Video stitched successfully: ${outPath}`);
+    return `${prefix || 'video'}.mp4`;
+  } catch (err) {
+    console.error(`[export] FFMPEG failed:`, err);
+    throw err;
+  }
+}
+function readProject(id: string): Project | null {
   const p = path.join(projectDir(id), PROJECT_FILE);
   return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf-8')) : null;
 }
-function writeProject(id: string, data: any) {
+function writeProject(id: string, data: Project) {
   fs.writeFileSync(path.join(projectDir(id), PROJECT_FILE), JSON.stringify(data, null, 2));
 }
 const SETTINGS_KEYS = new Set([
@@ -69,7 +203,7 @@ const SETTINGS_KEYS = new Set([
   'guides', 'activeGuide', 'cropToGuide', 'exportBackground', 'exportVideo', 'ui',
   'audioReactivity', 'mathFigure', 'exportAudio', 'music',
 ]);
-function readSettings(id: string, project?: any): any {
+function readSettings(id: string, project?: Project | null): Settings {
   const p = path.join(projectDir(id), SETTINGS_FILE);
   if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
 
@@ -78,11 +212,11 @@ function readSettings(id: string, project?: any): any {
   if (!source) return {};
   const settings: any = {};
   for (const key of SETTINGS_KEYS) {
-    if (source[key] !== undefined) settings[key] = source[key];
+    if ((source as any)[key] !== undefined) settings[key] = (source as any)[key];
   }
   return settings;
 }
-function writeSettings(id: string, data: any) {
+function writeSettings(id: string, data: Settings) {
   fs.writeFileSync(path.join(projectDir(id), SETTINGS_FILE), JSON.stringify(data, null, 2));
 }
 function captionPath(id: string): string {
@@ -92,7 +226,7 @@ function captionPath(id: string): string {
   if (proj?.transcriptFile) return path.join(dir, proj.transcriptFile);
   return path.join(dir, LEGACY_TRANSCRIPT_FILE);
 }
-function hasCaption(id: string, project?: any): boolean {
+function hasCaption(id: string, project?: Project | null): boolean {
   const dir = projectDir(id);
   const proj = project ?? readProject(id);
   if (proj?.captionFile && fs.existsSync(path.join(dir, proj.captionFile))) return true;
@@ -107,15 +241,16 @@ function clearCaptions(id: string) {
 function projectMeta(id: string) {
   const proj = readProject(id);
   if (!proj) return null;
+  const pDir = projectDir(id);
   return {
     id,
     name: proj.name || id,
     createdAt: proj.createdAt,
     updatedAt: proj.updatedAt,
     mediaType: proj.mediaType || (proj.audioFile ? 'audio' : proj.videoFile ? 'video' : null),
-    hasVideo: !!(proj.videoFile && fs.existsSync(path.join(projectDir(id), proj.videoFile))),
-    hasAudio: !!(proj.audioFile && fs.existsSync(path.join(projectDir(id), proj.audioFile))),
-    hasMusic: !!(proj.musicFile && fs.existsSync(path.join(projectDir(id), proj.musicFile))),
+    hasVideo: !!(proj.videoFile && fs.existsSync(path.join(pDir, proj.videoFile))),
+    hasAudio: !!(proj.audioFile && fs.existsSync(path.join(pDir, proj.audioFile))),
+    hasMusic: !!(proj.musicFile && fs.existsSync(path.join(pDir, proj.musicFile))),
     hasTranscript: hasCaption(id, proj),
   };
 }
@@ -124,19 +259,25 @@ function projectMeta(id: string) {
 
 // List projects
 app.get('/api/projects', (_req, res) => {
-  if (!fs.existsSync(PROJECTS_DIR)) return void res.json([]);
+  if (!fs.existsSync(PROJECTS_DIR)) {
+    res.json([]);
+    return;
+  }
   const items = fs.readdirSync(PROJECTS_DIR)
     .filter(d => fs.existsSync(path.join(PROJECTS_DIR, d, 'project.json')))
     .map(id => projectMeta(id))
-    .filter(Boolean)
-    .sort((a: any, b: any) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    .filter((p): p is NonNullable<typeof p> => !!p)
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   res.json(items);
 });
 
 // Create project
 app.post('/api/projects', (req, res) => {
   const { name } = req.body as { name?: string };
-  if (!name?.trim()) return void res.status(400).json({ error: 'Name required' });
+  if (!name?.trim()) {
+    res.status(400).json({ error: 'Name required' });
+    return;
+  }
   const id = uniqueSlug(slugify(name));
   fs.mkdirSync(projectDir(id), { recursive: true });
   const now = new Date().toISOString();
@@ -147,26 +288,35 @@ app.post('/api/projects', (req, res) => {
 
 // Get project
 app.get('/api/projects/:id', (req, res) => {
-  const proj = readProject(req.params.id);
-  if (!proj) return void res.status(404).json({ error: 'Not found' });
   const id = req.params.id;
+  const proj = readProject(id);
+  if (!proj) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  const settings = readSettings(id, proj);
+  const pDir = projectDir(id);
   res.json({
     ...proj,
-    ...readSettings(id, proj),
+    ...settings,
     mediaType: proj.mediaType || (proj.audioFile ? 'audio' : proj.videoFile ? 'video' : null),
-    hasVideo: !!(proj.videoFile && fs.existsSync(path.join(projectDir(id), proj.videoFile))),
-    hasAudio: !!(proj.audioFile && fs.existsSync(path.join(projectDir(id), proj.audioFile))),
-    hasMusic: !!(proj.musicFile && fs.existsSync(path.join(projectDir(id), proj.musicFile))),
+    hasVideo: !!(proj.videoFile && fs.existsSync(path.join(pDir, proj.videoFile))),
+    hasAudio: !!(proj.audioFile && fs.existsSync(path.join(pDir, proj.audioFile))),
+    hasMusic: !!(proj.musicFile && fs.existsSync(path.join(pDir, proj.musicFile))),
     hasTranscript: hasCaption(id, proj),
   });
 });
 
 // Save UI/shader/export settings (debounced from frontend)
 app.put('/api/projects/:id/settings', (req, res) => {
-  const proj = readProject(req.params.id);
-  if (!proj) return void res.status(404).json({ error: 'Not found' });
-  writeSettings(req.params.id, { ...readSettings(req.params.id, proj), ...req.body });
-  writeProject(req.params.id, { ...proj, updatedAt: new Date().toISOString() });
+  const id = req.params.id as string;
+  const proj = readProject(id);
+  if (!proj) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  writeSettings(id, { ...readSettings(id, proj), ...(req.body as any) });
+  writeProject(id, { ...proj, updatedAt: new Date().toISOString() });
   res.json({ ok: true });
 });
 
@@ -174,7 +324,7 @@ app.put('/api/projects/:id/settings', (req, res) => {
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, _file, cb) => {
-      const dir = projectDir(req.params.id);
+      const dir = projectDir(req.params.id as string);
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
@@ -184,9 +334,12 @@ const upload = multer({
 });
 
 app.post('/api/projects/:id/video', upload.single('video'), (req, res) => {
-  const id = req.params.id;
+  const id = req.params.id as string;
   const proj = readProject(id);
-  if (!proj || !req.file) return void res.status(400).json({ error: 'Bad request' });
+  if (!proj || !req.file) {
+    res.status(400).json({ error: 'Bad request' });
+    return;
+  }
 
   proj.videoFile = req.file.filename;
   proj.originalVideoName = req.file.originalname;
@@ -220,7 +373,7 @@ app.post('/api/projects/:id/video', upload.single('video'), (req, res) => {
 const audioUpload = multer({
   storage: multer.diskStorage({
     destination: (req, _file, cb) => {
-      const dir = projectDir(req.params.id);
+      const dir = projectDir(req.params.id as string);
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
@@ -230,9 +383,12 @@ const audioUpload = multer({
 });
 
 app.post('/api/projects/:id/audio', audioUpload.single('audio'), (req, res) => {
-  const id = req.params.id;
+  const id = req.params.id as string;
   const proj = readProject(id);
-  if (!proj || !req.file) return void res.status(400).json({ error: 'Bad request' });
+  if (!proj || !req.file) {
+    res.status(400).json({ error: 'Bad request' });
+    return;
+  }
 
   proj.audioFile = req.file.filename;
   proj.originalAudioName = req.file.originalname;
@@ -240,6 +396,7 @@ app.post('/api/projects/:id/audio', audioUpload.single('audio'), (req, res) => {
   proj.importedAt = new Date().toISOString();
   proj.updatedAt = proj.importedAt;
   delete proj.videoFile;
+  delete proj.originalVideoName;
   delete proj.transcriptFile;
   delete proj.captionFile;
   writeProject(id, proj);
@@ -301,7 +458,7 @@ app.get('/api/projects/:id/audio', (req, res) => {
 const musicUpload = multer({
   storage: multer.diskStorage({
     destination: (req, _file, cb) => {
-      const dir = projectDir(req.params.id);
+      const dir = projectDir(req.params.id as string);
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
@@ -311,9 +468,12 @@ const musicUpload = multer({
 });
 
 app.post('/api/projects/:id/music', musicUpload.single('music'), (req, res) => {
-  const id = req.params.id;
+  const id = req.params.id as string;
   const proj = readProject(id);
-  if (!proj || !req.file) return void res.status(400).json({ error: 'Bad request' });
+  if (!proj || !req.file) {
+    res.status(400).json({ error: 'Bad request' });
+    return;
+  }
 
   // Replace any existing music file so we don't accumulate orphans.
   if (proj.musicFile && proj.musicFile !== req.file.filename) {
@@ -329,9 +489,12 @@ app.post('/api/projects/:id/music', musicUpload.single('music'), (req, res) => {
 
 // Delete the project's music file (if any) and clear it from project.json.
 app.delete('/api/projects/:id/music', (req, res) => {
-  const id = req.params.id;
+  const id = req.params.id as string;
   const proj = readProject(id);
-  if (!proj) return void res.status(404).json({ error: 'Not found' });
+  if (!proj) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
 
   if (proj.musicFile) {
     try { fs.unlinkSync(path.join(projectDir(id), proj.musicFile)); } catch {}
@@ -420,27 +583,39 @@ const frameUpload = multer({
 });
 
 app.post('/api/projects/:id/exports/:exportId/frame', frameUpload.single('frame'), (req, res) => {
-  const id = req.params.id;
+  const id = req.params.id as string;
   const proj = readProject(id);
-  if (!proj || !req.file) return void res.status(400).json({ error: 'Bad request' });
+  if (!proj || !req.file) {
+    res.status(400).json({ error: 'Bad request' });
+    return;
+  }
 
-  const exportId = slugify(req.params.exportId);
+  const exportId = slugify(req.params.exportId as string);
   const dir = exportDir(id, exportId);
-  if (!fs.existsSync(dir)) return void res.status(404).json({ error: 'Export folder not found' });
+  if (!fs.existsSync(dir)) {
+    res.status(404).json({ error: 'Export folder not found' });
+    return;
+  }
 
   const filename = safePngFilename(String(req.body?.filename || req.file.originalname || 'frame.png'));
   fs.writeFileSync(path.join(dir, filename), req.file.buffer);
   res.json({ ok: true, filename });
 });
 
-app.post('/api/projects/:id/exports/:exportId/finish', (req, res) => {
-  const id = req.params.id;
+app.post('/api/projects/:id/exports/:exportId/finish', async (req, res) => {
+  const id = req.params.id as string;
   const proj = readProject(id);
-  if (!proj) return void res.status(404).json({ error: 'Not found' });
+  if (!proj) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
 
-  const exportId = slugify(req.params.exportId);
+  const exportId = slugify(req.params.exportId as string);
   const dir = exportDir(id, exportId);
-  if (!fs.existsSync(dir)) return void res.status(404).json({ error: 'Export folder not found' });
+  if (!fs.existsSync(dir)) {
+    res.status(404).json({ error: 'Export folder not found' });
+    return;
+  }
 
   const manifestPath = path.join(dir, 'manifest.json');
   const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) : {};
@@ -449,17 +624,40 @@ app.post('/api/projects/:id/exports/:exportId/finish', (req, res) => {
     status: 'complete',
     completedAt: new Date().toISOString(),
   }, null, 2));
+
+  // Trigger FFMPEG stitching
+  let videoFile = null;
+  try {
+    videoFile = await stitchVideo(id, exportId);
+    if (videoFile) {
+      const updatedManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      fs.writeFileSync(manifestPath, JSON.stringify({
+        ...updatedManifest,
+        videoFile,
+      }, null, 2));
+    }
+  } catch (err) {
+    console.error('Stitching failed', err);
+  }
+
   proj.updatedAt = new Date().toISOString();
   writeProject(id, proj);
-  res.json({ ok: true, folder: `projects/${id}/exports/${exportId}` });
+  res.json({ ok: true, folder: `projects/${id}/exports/${exportId}`, videoFile });
 });
 
 // Serve video with range-request support for scrubbing
 app.get('/api/projects/:id/video', (req, res) => {
-  const proj = readProject(req.params.id);
-  if (!proj?.videoFile) return void res.status(404).json({ error: 'No video' });
-  const vp = path.join(projectDir(req.params.id), proj.videoFile);
-  if (!fs.existsSync(vp)) return void res.status(404).json({ error: 'File not found' });
+  const id = req.params.id as string;
+  const proj = readProject(id);
+  if (!proj?.videoFile) {
+    res.status(404).json({ error: 'No video' });
+    return;
+  }
+  const vp = path.join(projectDir(id), proj.videoFile);
+  if (!fs.existsSync(vp)) {
+    res.status(404).json({ error: 'File not found' });
+    return;
+  }
 
   const stat = fs.statSync(vp);
   const total = stat.size;
@@ -486,8 +684,12 @@ app.get('/api/projects/:id/video', (req, res) => {
 
 // Get transcript JSON
 app.get('/api/projects/:id/transcript', (req, res) => {
-  const tp = captionPath(req.params.id);
-  if (!fs.existsSync(tp)) return void res.status(404).json({ error: 'No transcript' });
+  const id = req.params.id as string;
+  const tp = captionPath(id);
+  if (!fs.existsSync(tp)) {
+    res.status(404).json({ error: 'No transcript' });
+    return;
+  }
   res.json(JSON.parse(fs.readFileSync(tp, 'utf-8')));
 });
 
@@ -510,6 +712,35 @@ app.get('/api/projects/:id/stream', (req, res) => {
   req.on('close', () => {
     clearInterval(hb);
     sseClients.get(id)?.delete(send);
+  });
+});
+
+// Open a local folder in the OS file explorer
+app.post('/api/projects/:id/exports/:exportId/open', (req, res) => {
+  const id = req.params.id as string;
+  const exportId = req.params.exportId as string; // Don't slugify here, use it as it comes from the URL
+  const dir = path.resolve(exportDir(id, exportId));
+  
+  console.log(`[shell] Open request for project=${id} export=${exportId}`);
+  console.log(`[shell] Resolved directory: ${dir}`);
+
+  if (!fs.existsSync(dir)) {
+    console.error(`[shell] Directory does not exist: ${dir}`);
+    res.status(404).json({ error: 'Folder not found' });
+    return;
+  }
+
+  const platform = process.platform;
+  const cmd = platform === 'win32' ? `start ""` : platform === 'darwin' ? 'open' : 'xdg-open';
+  
+  console.log(`[shell] Executing: ${cmd} "${dir}"`);
+  exec(`${cmd} "${dir}"`, (err) => {
+    if (err) {
+      console.error('[shell] Failed to open folder:', err);
+      res.status(500).json({ error: 'Failed to open folder' });
+      return;
+    }
+    res.json({ ok: true });
   });
 });
 

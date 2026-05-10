@@ -133,7 +133,7 @@ float getNoise(vec2 uv, int type, int octaves) {
 
 void main() {
   vec2 uv = gl_FragCoord.xy / u_resolution.xy;
-  vec2 p = (uv - 0.5) * 2.0;
+  vec2 p = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / min(u_resolution.x, u_resolution.y);
   float c = cos(u_rotation);
   float s = sin(u_rotation);
   mat2 R = mat2(c, -s, s, c);

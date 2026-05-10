@@ -41,6 +41,10 @@ export class VideoRenderer {
       fragmentShader: dancingVideoFragmentShader,
       transparent: true,
     });
+    // Ensure uniforms use Vector2 for reliable updates
+    this.material.uniforms.uResolution.value = new THREE.Vector2(1920, 1080);
+    this.material.uniforms.uUvScale.value = new THREE.Vector2(1, 1);
+    
     this.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material));
 
     this.applyParams();
@@ -73,8 +77,7 @@ export class VideoRenderer {
     // React's frameStyle controls the on-screen size; this only changes the
     // backing-store resolution.
     this.renderer.setSize(this.width, this.height, false);
-    (this.material.uniforms.uResolution.value as { x: number; y: number }).x = this.width;
-    (this.material.uniforms.uResolution.value as { x: number; y: number }).y = this.height;
+    (this.material.uniforms.uResolution.value as THREE.Vector2).set(this.width, this.height);
   }
 
   setParams(p: VideoShaderParams) {
@@ -115,18 +118,35 @@ export class VideoRenderer {
   }
 
   /** Render the current video frame. */
-  renderFrame() {
+  renderFrame(timeSeconds?: number) {
     // Always keep the renderer transparent so the shader's alpha output
     // (uAlphaThreshold + dither masking) is preserved both in the preview
     // and in the exported PNGs.
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.setRenderTarget(null);
-    if (!this.videoTexture) {
+    if (!this.videoTexture || !this.video) {
       this.renderer.clear();
       return;
     }
+
+    // Update aspect ratio correction (cover fit)
+    const vw = this.video.videoWidth || 1;
+    const vh = this.video.videoHeight || 1;
+    const videoAspect = vw / vh;
+    const outputAspect = this.width / this.height;
+    const u = this.material.uniforms;
+    const uvScale = u.uUvScale.value as THREE.Vector2;
+
+    if (videoAspect > outputAspect) {
+      // Video is wider than output: fit height, crop sides
+      uvScale.set(outputAspect / videoAspect, 1.0);
+    } else {
+      // Video is taller than output: fit width, crop top/bottom
+      uvScale.set(1.0, videoAspect / outputAspect);
+    }
+
     this.videoTexture.needsUpdate = true;
-    this.material.uniforms.uTime.value = (performance.now() - this.startTime) / 1000;
+    this.material.uniforms.uTime.value = timeSeconds !== undefined ? timeSeconds : (performance.now() - this.startTime) / 1000;
     this.renderer.render(this.scene, this.camera);
   }
 

@@ -136,6 +136,18 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
     }
   };
 
+  const handleOpenFolder = async () => {
+    if (!folder) return;
+    // folder format: "projects/PROJECT_ID/exports/EXPORT_ID/FILE.mp4" or "projects/PROJECT_ID/exports/EXPORT_ID"
+    const parts = folder.split('/');
+    const projectId = parts[1];
+    const exportId = parts[3];
+    if (projectId && exportId) {
+      const { openExportFolder } = await import('../lib/projectApi');
+      await openExportFolder(projectId, exportId);
+    }
+  };
+
   return (
     <Section title="Export">
       <Slider label="width" value={params.width} min={64} max={7680} step={1} onChange={(v) => set({ width: Math.round(v) })} />
@@ -271,6 +283,7 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
       <div style={{ marginTop: 6, color: '#888' }}>
         {totalFrames} frames @ {params.width}×{params.height}
         {lockedDuration !== undefined ? ` (video: ${totalDuration.toFixed(2)}s)` : ''}
+        {params.width === 1080 && params.height === 1080 ? '' : ' (Note: Active Crop Guide may override these)'}
       </div>
       {layerSummary && <div style={{ marginTop: 4, color: '#777', lineHeight: 1.4 }}>Layers: {layerSummary}</div>}
 
@@ -279,11 +292,31 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
           onClick={handleExport}
           disabled={exporting}
           style={{
-            flex: 1, padding: '8px 12px', background: exporting ? '#222' : '#1f6feb',
-            color: '#fff', border: 'none', borderRadius: 3, cursor: exporting ? 'wait' : 'pointer',
+            position: 'relative',
+            flex: 1, padding: '8px 12px',
+            background: exporting ? '#222' : '#1f6feb',
+            color: '#fff', border: 'none', borderRadius: 3,
+            cursor: exporting ? 'wait' : 'pointer',
+            overflow: 'hidden',
           }}
         >
-          {exporting ? `Exporting ${progress?.done ?? 0} / ${progress?.total ?? totalFrames}` : exportLabel}
+          {exporting && (
+            <div
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: `${((progress?.done ?? 0) / (progress?.total ?? 1)) * 100}%`,
+                background: '#1f6feb',
+                opacity: 0.4,
+                transition: 'width 100ms linear',
+              }}
+            />
+          )}
+          <span style={{ position: 'relative', zIndex: 1 }}>
+            {exporting ? `Exporting ${progress?.done ?? 0} / ${progress?.total ?? totalFrames}` : exportLabel}
+          </span>
         </button>
         {exporting && (
           <button
@@ -300,7 +333,29 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
 
       {error && <div style={{ color: '#ff6b6b', marginTop: 6 }}>{error}</div>}
       {cancelled && <div style={{ color: '#eb6f1f', marginTop: 6 }}>Export cancelled.</div>}
-      {folder && <div style={{ color: '#30d158', marginTop: 6 }}>Saved to {folder}</div>}
+      {folder && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ color: '#30d158' }}>Saved to {folder}</div>
+          <button
+            onClick={handleOpenFolder}
+            style={{
+              alignSelf: 'flex-start',
+              padding: '6px 12px',
+              background: '#333',
+              color: '#eee',
+              border: '1px solid #444',
+              borderRadius: 3,
+              cursor: 'pointer',
+              fontSize: 12,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            <span role="img" aria-label="folder">📂</span> Open Folder
+          </button>
+        </div>
+      )}
       <div style={{ color: '#666', marginTop: 6, lineHeight: 1.5 }}>
         Files: <code>{params.filenamePrefix}_00001.png</code> … inside this project folder.<br />
         In Resolve: Media Pool → Import → enable "Image Sequence" → select first frame.

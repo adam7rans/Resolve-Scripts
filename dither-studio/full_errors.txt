@@ -1,0 +1,36 @@
+src/components/App.tsx(58,15): error TS2345: Argument of type '(prev: Toast[]) => (Toast | { id: string; message: string; type: "progress" | "success" | "error" | "info"; sticky: boolean; })[]' is not assignable to parameter of type 'SetStateAction<Toast[]>'.
+  Type '(prev: Toast[]) => (Toast | { id: string; message: string; type: "progress" | "success" | "error" | "info"; sticky: boolean; })[]' is not assignable to type '(prevState: Toast[]) => Toast[]'.
+    Type '(Toast | { id: string; message: string; type: "progress" | "success" | "error" | "info"; sticky: boolean; })[]' is not assignable to type 'Toast[]'.
+      Type 'Toast | { id: string; message: string; type: "progress" | "success" | "error" | "info"; sticky: boolean; }' is not assignable to type 'Toast'.
+        Type '{ id: string; message: string; type: "progress" | "success" | "error" | "info"; sticky: boolean; }' is not assignable to type 'Toast'.
+          Types of property 'id' are incompatible.
+            Type 'string' is not assignable to type 'number'.
+src/components/App.tsx(62,37): error TS2367: This comparison appears to be unintentional because the types 'number' and 'string' have no overlap.
+src/components/App.tsx(64,74): error TS2367: This comparison appears to be unintentional because the types 'number' and 'string' have no overlap.
+src/components/App.tsx(69,16): error TS2554: Expected 3 arguments, but got 1.
+src/components/App.tsx(70,17): error TS2554: Expected 2 arguments, but got 1.
+src/components/App.tsx(70,38): error TS2339: Property 'gl' does not exist on type 'BackgroundRenderer'.
+src/components/App.tsx(71,46): error TS2339: Property 'gl' does not exist on type 'BackgroundRenderer'.
+src/components/App.tsx(105,8): error TS2339: Property 'update' does not exist on type 'BackgroundRenderer'.
+src/components/App.tsx(106,8): error TS2551: Property 'render' does not exist on type 'BackgroundRenderer'. Did you mean 'renderer'?
+src/components/App.tsx(110,11): error TS2551: Property 'render' does not exist on type 'VideoRenderer'. Did you mean 'renderer'?
+src/components/App.tsx(116,38): error TS2554: Expected 2 arguments, but got 4.
+src/components/App.tsx(118,9): error TS2554: Expected 7 arguments, but got 4.
+src/components/App.tsx(135,27): error TS2345: Argument of type '{ id: string; name: string; }' is not assignable to parameter of type 'string'.
+src/components/App.tsx(213,12): error TS2339: Property 'update' does not exist on type 'BackgroundRenderer'.
+src/components/App.tsx(214,12): error TS2551: Property 'render' does not exist on type 'BackgroundRenderer'. Did you mean 'renderer'?
+src/components/App.tsx(217,17): error TS2304: Cannot find name 'seekVideoTo'.
+src/components/App.tsx(218,15): error TS2551: Property 'render' does not exist on type 'VideoRenderer'. Did you mean 'renderer'?
+src/components/App.tsx(222,44): error TS2554: Expected 2 arguments, but got 4.
+src/components/App.tsx(224,15): error TS2554: Expected 7 arguments, but got 4.
+src/components/App.tsx(299,33): error TS2322: Type '{ key: number; message: string; type: "progress" | "success" | "error" | "info"; onRemove: () => void; }' is not assignable to type 'IntrinsicAttributes & Props'.
+  Property 'message' does not exist on type 'IntrinsicAttributes & Props'.
+src/components/App.tsx(299,95): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+src/components/MainSidebar.tsx(107,9): error TS2322: Type '{ active: any; onChange: (mainTab: string) => void; options: { value: string; label: string; }[]; }' is not assignable to type 'IntrinsicAttributes & { tabs: TabDef<string>[]; value: string; onChange: (v: string) => void; variant?: "main" | "sub" | undefined; }'.
+  Property 'active' does not exist on type 'IntrinsicAttributes & { tabs: TabDef<string>[]; value: string; onChange: (v: string) => void; variant?: "main" | "sub" | undefined; }'.
+src/components/MainSidebar.tsx(159,29): error TS2304: Cannot find name 'transcript'.
+src/components/MainSidebar.tsx(163,32): error TS2304: Cannot find name 'videoElRef'.
+src/components/MainSidebar.tsx(167,29): error TS2304: Cannot find name 'transcript'.
+src/components/MainSidebar.tsx(168,17): error TS2322: Type '{ transcript: any; time: any; style: CaptionStyle; params: CaptionShaderParams; }' is not assignable to type 'IntrinsicAttributes & ShaderCaptionsProps'.
+  Property 'time' does not exist on type 'IntrinsicAttributes & ShaderCaptionsProps'.
+src/components/MainSidebar.tsx(168,23): error TS2304: Cannot find name 'currentTime'.

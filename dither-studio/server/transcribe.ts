@@ -13,6 +13,7 @@ const CAPTION_FILE = 'caption.json';
 
 export type TranscribeEvent =
   | { type: 'video_saved'; message: string }
+  | { type: 'caption_saved'; message: string }
   | { type: 'audio_extracting'; message: string }
   | { type: 'audio_extracted'; message: string }
   | { type: 'uploading'; message: string }

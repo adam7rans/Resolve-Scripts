@@ -39,6 +39,7 @@ uniform float uDistortionSpeed; // Speed of sine wave animation
 uniform float uDistortionAngle; // Angle of distortion in radians
 uniform float uRotation;
 uniform float uScale;
+uniform vec2 uUvScale;
 varying vec2 vUv;
 
 // Dither type constants
@@ -196,6 +197,9 @@ void main() {
   // Apply uniform scale
   centeredUv *= uScale;
 
+  // Apply non-uniform scale (aspect correction)
+  centeredUv *= uUvScale;
+
   // Translate back
   distortedUv = centeredUv + 0.5;
 
@@ -207,6 +211,11 @@ void main() {
     // Create wave pattern along the specified direction
     float wavePattern = dot(vUv - 0.5, waveDirection);
     float wave = sin(wavePattern * uDistortionFrequency + uTime * uDistortionSpeed) * uDistortionAmplitude;
+
+    // Fade out distortion at the edges to prevent "lifting" or gaps at the frame boundaries.
+    float edgeFade = smoothstep(0.0, 0.05, vUv.x) * (1.0 - smoothstep(0.95, 1.0, vUv.x)) *
+                     smoothstep(0.0, 0.05, vUv.y) * (1.0 - smoothstep(0.95, 1.0, vUv.y));
+    wave *= edgeFade;
 
     // Apply distortion perpendicular to wave direction
     vec2 perpDirection = vec2(-waveDirection.y, waveDirection.x);
@@ -334,7 +343,8 @@ export const dancingVideoShaderUniforms = {
   uDistortionSpeed: { value: 2.0 }, // Speed of sine wave animation
   uDistortionAngle: { value: 0.0 }, // Angle of distortion in radians
   uRotation: { value: 0.0 },
-  uScale: { value: 1.0 }
+  uScale: { value: 1.0 },
+  uUvScale: { value: { x: 1.0, y: 1.0 } }
 };
 
 // Dither type constants for TypeScript

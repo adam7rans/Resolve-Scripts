@@ -4,6 +4,20 @@ import { DEFAULT_CAPTION_STYLE, type CaptionStyle } from './types';
 const isWordActive = (w: TranscriptWord, ms: number) =>
   ms >= (w.start ?? 0) && ms <= (w.end ?? w.start ?? 0);
 
+/**
+ * Split a token into [leadingPunct, body, trailingPunct]. Mirrors the same
+ * helper in Captions.tsx so the punctuation never receives the active
+ * highlight colour or an underline. If the token is entirely punctuation
+ * (e.g. "—") it returns it as the leading part and an empty body.
+ */
+const splitWordParts = (text: string): { lead: string; body: string; trail: string } => {
+  const m = /^(\p{P}*)(.*?)(\p{P}*)$/u.exec(text);
+  if (!m) return { lead: '', body: text, trail: '' };
+  const [, lead, body, trail] = m;
+  if (!body) return { lead: text, body: '', trail: '' };
+  return { lead: lead ?? '', body, trail: trail ?? '' };
+};
+
 function applyCaptionFont(ctx: CanvasRenderingContext2D, size: number, style: CaptionStyle) {
   ctx.font = `${style.fontWeight} ${size}px ${style.fontFamily}`;
   (ctx as any).letterSpacing = `${style.letterSpacing}em`;
@@ -87,12 +101,16 @@ export function drawCaptionsToCanvas(
   width: number,
   height: number,
   inputStyle: CaptionStyle,
+  scale = 1.0, // Scale factor: exportWidth / previewWidth
 ) {
   const style = { ...DEFAULT_CAPTION_STYLE, ...inputStyle };
   const wordBoxWidth = width * 0.92;
   const lineBoxFraction = Math.max(0.01, Math.min(1, (style.lineMaxWidth ?? 92) / 100));
   const lineBoxWidth = width * lineBoxFraction;
   const centerY = (height * style.verticalPosition) / 100;
+
+  const lineFontSize = style.lineFontSize * scale;
+  const wordFontSize = style.wordFontSize * scale;
 
   ctx.save();
   ctx.textAlign = 'left';
@@ -103,13 +121,15 @@ export function drawCaptionsToCanvas(
       ctx.restore();
       return;
     }
-    applyCaptionFont(ctx, style.wordFontSize, style);
+    applyCaptionFont(ctx, wordFontSize, style);
+    ctx.shadowBlur = 14 * scale;
+    ctx.shadowOffsetY = 2 * scale;
     const wordWidth = measure(ctx, word);
     const wordBoxLeft = ((width - wordBoxWidth) * style.horizontalPosition) / 100;
     const x = lineStartX(wordBoxLeft, wordBoxWidth, wordWidth, style.textAlign);
     ctx.fillStyle = style.color;
     ctx.globalAlpha = style.wordHighlightEnabled ? 1 : 1;
-    ctx.fillText(word, x, centerY + style.wordFontSize / 3);
+    ctx.fillText(word, x, centerY + wordFontSize / 3);
     ctx.restore();
     return;
   }
@@ -120,7 +140,9 @@ export function drawCaptionsToCanvas(
     return;
   }
 
-  applyCaptionFont(ctx, style.lineFontSize, style);
+  applyCaptionFont(ctx, lineFontSize, style);
+  ctx.shadowBlur = 12 * scale;
+  ctx.shadowOffsetY = 2 * scale;
   const boxWidth = lineBoxWidth;
   const boxLeft = ((width - lineBoxWidth) * style.horizontalPosition) / 100;
   // Underline fade window (ms). 0 → instant on/off, matches the React preview.
@@ -149,9 +171,9 @@ export function drawCaptionsToCanvas(
     : sentence.text.split(/\s+/).filter(Boolean).map((text) => ({ text: `${text} `, word: text }));
 
   const lines = wrapTokens(ctx, tokens, boxWidth);
-  const lineHeightPx = style.lineFontSize * style.lineHeight;
-  const totalHeight = Math.max(style.lineFontSize, lines.length * lineHeightPx);
-  let y = centerY - totalHeight / 2 + style.lineFontSize;
+  const lineHeightPx = lineFontSize * style.lineHeight;
+  const totalHeight = Math.max(lineFontSize, lines.length * lineHeightPx);
+  let y = centerY - totalHeight / 2 + lineFontSize;
 
   // Resolve underline mode (with legacy boolean fallback).
   const underlineMode: 'off' | 'draw' | 'fade' =
@@ -162,19 +184,51 @@ export function drawCaptionsToCanvas(
     let x = lineStartX(boxLeft, boxWidth, lineWidth, style.textAlign);
     for (const token of line) {
       const tokenWidth = measure(ctx, token.text);
-      ctx.fillStyle = style.wordHighlightEnabled
-        ? token.active ? style.color : style.dimColor
+      // Render lead/body/trail separately so punctuation never receives the
+      // active highlight colour. The body is the real word; lead/trail keep
+      // the dim colour even when the token is "active".
+      const word = (token as any).word ?? token.text.trimEnd();
+      const { lead, body, trail } = splitWordParts(word);
+      const trailingSpace = token.text.endsWith(' ') ? ' ' : '';
+      const dim = style.wordHighlightEnabled ? style.dimColor : style.color;
+      const active = style.wordHighlightEnabled
+        ? (token.active ? style.color : style.dimColor)
         : style.color;
-      ctx.fillText(token.text, x, y);
 
-      if (token.active && underlineMode !== 'off') {
-        // Underline only the word itself, not the trailing space — matches
-        // the React preview where the bar sits under each word.
-        const wordWidth = measure(ctx, (token as any).word ?? token.text.trimEnd());
+      const leadW = lead ? measure(ctx, lead) : 0;
+      const bodyW = body ? measure(ctx, body) : 0;
+      const trailW = trail ? measure(ctx, trail) : 0;
+
+      let cx = x;
+      if (lead) {
+        ctx.fillStyle = dim;
+        ctx.fillText(lead, cx, y);
+        cx += leadW;
+      }
+      if (body) {
+        ctx.fillStyle = active;
+        ctx.fillText(body, cx, y);
+      }
+      const bodyX = cx;
+      cx += bodyW;
+      if (trail) {
+        ctx.fillStyle = dim;
+        ctx.fillText(trail, cx, y);
+        cx += trailW;
+      }
+      // Re-emit the token's trailing space (if any) using the dim colour so
+      // word spacing matches what wrapTokens measured.
+      if (trailingSpace) {
+        ctx.fillStyle = dim;
+        ctx.fillText(trailingSpace, cx, y);
+      }
+
+      if (token.active && underlineMode !== 'off' && body) {
+        // Underline ONLY the body (no leading/trailing punctuation, no space).
         const barWidth =
           underlineMode === 'draw'
-            ? wordWidth * (token.progress ?? 0)
-            : wordWidth;
+            ? bodyW * (token.progress ?? 0)
+            : bodyW;
         const alpha =
           underlineMode === 'fade' ? ((token as any).fadeAlpha ?? 0) : 1;
         if (barWidth > 0 && alpha > 0) {
@@ -182,7 +236,7 @@ export function drawCaptionsToCanvas(
           ctx.shadowColor = 'transparent';
           ctx.globalAlpha = alpha;
           ctx.fillStyle = style.color;
-          ctx.fillRect(x, y + 5, barWidth, 2);
+          ctx.fillRect(bodyX, y + (5 * scale), barWidth, 2 * scale);
           ctx.restore();
         }
       }

@@ -224,6 +224,32 @@ export const DEFAULT_AUDIO_REACTIVITY: AudioReactivityParams = {
   modBrightness: 0.6,
 };
 
+/**
+ * Shader effect applied to the caption layer using the WICG html-in-canvas
+ * proposal (texElementImage2D + paint event). When `enabled` is true and the
+ * browser exposes the API, captions are rendered through a WebGL pass that
+ * applies a sine-wave UV displacement.
+ */
+export interface CaptionShaderParams {
+  enabled: boolean;
+  /** Cycles of the sine wave across the canvas along the propagation direction. */
+  frequency: number;
+  /** Animation speed (radians per second). */
+  speed: number;
+  /** Displacement magnitude in UV units (0..0.2 is a sane range). */
+  amplitude: number;
+  /** Direction of wave propagation in degrees (0 = horizontal travel, 90 = vertical). */
+  angleDeg: number;
+}
+
+export const DEFAULT_CAPTION_SHADER: CaptionShaderParams = {
+  enabled: false,
+  frequency: 8,
+  speed: 2.0,
+  amplitude: 0.01,
+  angleDeg: 0,
+};
+
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   fontFamily: '"Source Code Pro", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
   lineFontSize: 28,

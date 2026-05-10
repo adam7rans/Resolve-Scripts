@@ -89,6 +89,8 @@ export async function createProjectExport(
     height: number;
     fps: number;
     totalFrames: number;
+    startTime?: number;
+    duration?: number;
     layers: Record<string, boolean>;
   },
 ): Promise<{ ok: boolean; exportId: string; folder: string }> {
@@ -117,10 +119,14 @@ export async function uploadExportFrame(
   if (!res.ok) throw new Error(`Failed to save ${filename}`);
 }
 
-export async function finishProjectExport(id: string, exportId: string): Promise<{ ok: boolean; folder: string }> {
+export async function finishProjectExport(id: string, exportId: string): Promise<{ ok: boolean; folder: string; videoFile?: string }> {
   const res = await fetch(`${BASE}/projects/${id}/exports/${exportId}/finish`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to finish project export');
   return res.json();
+}
+
+export async function openExportFolder(id: string, exportId: string): Promise<void> {
+  await fetch(`${BASE}/projects/${id}/exports/${exportId}/open`, { method: 'POST' });
 }
 
 export function getVideoUrl(id: string): string {

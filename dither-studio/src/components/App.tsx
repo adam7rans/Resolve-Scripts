@@ -1,13 +1,14 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackgroundRenderer } from '../lib/BackgroundRenderer';
 import { VideoRenderer } from '../lib/VideoRenderer';
+import { CaptionShaderRenderer } from '../lib/CaptionShaderRenderer';
 import { AudioSource, type AudioBands, type LimiterParams, DEFAULT_LIMITER } from '../lib/AudioSource';
 import { MusicPlayer, DEFAULT_MUSIC_PARAMS, type MusicParams } from '../lib/MusicPlayer';
 import {
   DEFAULT_BACKGROUND, DEFAULT_DITHER, DEFAULT_VIDEO, DEFAULT_EXPORT,
-  DEFAULT_CAPTION_STYLE, DEFAULT_AUDIO_REACTIVITY,
+  DEFAULT_CAPTION_STYLE, DEFAULT_AUDIO_REACTIVITY, DEFAULT_CAPTION_SHADER,
   type BackgroundParams, type DitherParams, type VideoShaderParams, type ExportParams, type CaptionStyle,
-  type AudioReactivityParams,
+  type AudioReactivityParams, type CaptionShaderParams,
 } from '../lib/types';
 import { PRESETS, VIDEO_PRESETS } from '../lib/presets';
 import { canvasToPngBlob, frameNumber, seekVideoTo } from '../lib/exporter';
@@ -21,6 +22,7 @@ import {
 import { ExportPanel } from './ExportPanel';
 import { TabBar } from './Tabs';
 import { Captions } from './Captions';
+import { ShaderCaptions } from './ShaderCaptions';
 import { parseTranscript, type CaptionMode, type TranscriptData } from '../lib/transcript';
 import { ProjectBar } from './ProjectBar';
 import { StatusToast, type Toast } from './StatusToast';
@@ -598,6 +600,7 @@ export const App: React.FC = () => {
   const [transcriptName, setTranscriptName] = useState<string | null>(null);
   const [captionMode, setCaptionMode] = useState<CaptionMode>('line');
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
+  const [captionShader, setCaptionShader] = useState<CaptionShaderParams>(DEFAULT_CAPTION_SHADER);
 
   // composition guides — only one can be active at a time
   const [activeGuide, setActiveGuide] = useState<GuideKey | null>(null);
@@ -774,12 +777,14 @@ export const App: React.FC = () => {
   // Push music volume/mute into the player whenever they change. Sidechain
   // params are picked up live each frame from musicRef.
   useEffect(() => {
-    musicPlayerRef.current?.setVolume(music.volume, music.muted || !musicLayerOn);
+    // The global Mute button (top of sidebar) silences every audio source,
+    // so OR it into the music's own muted/layer-off state.
+    musicPlayerRef.current?.setVolume(music.volume, music.muted || !musicLayerOn || muted);
     if (!music.sidechain.enabled) {
       musicPlayerRef.current?.resetDuck();
       musicDuckGainRef.current = 1;
     }
-  }, [music.volume, music.muted, music.sidechain.enabled, musicLayerOn]);
+  }, [music.volume, music.muted, music.sidechain.enabled, musicLayerOn, muted]);
 
   // push parameter updates
   useEffect(() => { bgRendererRef.current?.setParams(bg); }, [bg]);
@@ -855,13 +860,13 @@ export const App: React.FC = () => {
       saveSettings(activeProjectId, {
         background: bg, backgroundDither: bgDither, video: vid,
         audioReactivity, music, limiter,
-        captionMode, captionStyle,
+        captionMode, captionStyle, captionShader,
         layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn, music: musicLayerOn },
         activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
         ui: { mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume },
       }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, bgLayerOn, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume]);
+  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume]);
 
   // ---------- SSE stream for transcription progress ----------
   useEffect(() => {
@@ -940,6 +945,7 @@ export const App: React.FC = () => {
       setCaptionsLayerOn(true);
       setCaptionMode('line');
       setCaptionStyle(DEFAULT_CAPTION_STYLE);
+      setCaptionShader(DEFAULT_CAPTION_SHADER);
       setMuted(false);
       setMediaVolume(1);
       setVideoInfo(null);
@@ -1012,6 +1018,8 @@ export const App: React.FC = () => {
       else setLimiter(DEFAULT_LIMITER);
       if (proj.captionMode) setCaptionMode(proj.captionMode);
       if (proj.captionStyle) setCaptionStyle({ ...DEFAULT_CAPTION_STYLE, ...proj.captionStyle });
+      if (proj.captionShader) setCaptionShader({ ...DEFAULT_CAPTION_SHADER, ...proj.captionShader });
+      else setCaptionShader(DEFAULT_CAPTION_SHADER);
       if (proj.ui) {
         if (proj.ui.mainTab) {
           // Migrate legacy tab ids: 'reactivity' and 'music' became sub-tabs of 'audio'.
@@ -1486,8 +1494,9 @@ export const App: React.FC = () => {
       try { await audio.preloadEnvelope(); } catch (e) { console.warn('Audio envelope preload failed', e); }
     }
 
-    const width = Math.max(1, Math.floor(params.width));
-    const height = Math.max(1, Math.floor(params.height));
+    const activeGuideObj = cropToGuide ? GUIDES.find((g) => g.key === activeGuide) : null;
+    const width = activeGuideObj ? activeGuideObj.w : Math.max(1, Math.floor(params.width));
+    const height = activeGuideObj ? activeGuideObj.h : Math.max(1, Math.floor(params.height));
     const duration = range.duration;
     const total = Math.max(1, Math.ceil(duration * params.fps));
     const canvas = document.createElement('canvas');
@@ -1495,6 +1504,14 @@ export const App: React.FC = () => {
     canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Could not create export canvas.');
+
+    const capRenderer = (captionsLayerOn && captionShader.enabled) ? new CaptionShaderRenderer(document.createElement('canvas')) : null;
+    const capOffscreen = capRenderer ? document.createElement('canvas') : null;
+    if (capRenderer && capOffscreen) {
+      capRenderer.resize(width, height, 1);
+      capOffscreen.width = width;
+      capOffscreen.height = height;
+    }
 
     exportingRef.current = true;
     const mediaEl = video ?? audioElRef.current;
@@ -1510,6 +1527,8 @@ export const App: React.FC = () => {
         height,
         fps: params.fps,
         totalFrames: total,
+        startTime: range.start,
+        duration: range.duration,
         layers: {
           background: bgLayerOn,
           video: videoLayerOn,
@@ -1543,12 +1562,31 @@ export const App: React.FC = () => {
           if (t > video.duration) break;
           await seekVideoTo(video, t);
           throwIfAborted();
-          videoRenderer.renderFrame();
+          videoRenderer.renderFrame(t);
           ctx.drawImage(videoRenderer.renderer.domElement as HTMLCanvasElement, 0, 0, width, height);
         }
 
         if (captionsLayerOn && transcript) {
-          drawCaptionsToCanvas(ctx, transcript, captionMode, t * 1000, width, height, captionStyle);
+          // Use the same frame logic as the preview overlay (ShaderCaptions)
+          // so the scaling factor is based on the actual visible area.
+          const guide = cropToGuide ? availableGuides.find((g) => g.key === activeGuide) : undefined;
+          const logicalCaptionFrame = guide && videoInfo
+            ? guideRectInVideoFrame(previewFrame, videoInfo, guide)
+            : previewFrame;
+          
+          const capScale = width / logicalCaptionFrame.w;
+          
+          if (capRenderer && capOffscreen) {
+            const capCtx = capOffscreen.getContext('2d');
+            if (capCtx) {
+               capCtx.clearRect(0, 0, width, height);
+               drawCaptionsToCanvas(capCtx, transcript, captionMode, t * 1000, width, height, captionStyle, capScale);
+               capRenderer.render(capOffscreen, captionShader, t);
+               ctx.drawImage(capRenderer.canvas, 0, 0, width, height);
+            }
+          } else {
+            drawCaptionsToCanvas(ctx, transcript, captionMode, t * 1000, width, height, captionStyle, capScale);
+          }
         }
 
         const blob = await canvasToPngBlob(canvas);
@@ -1562,10 +1600,12 @@ export const App: React.FC = () => {
         }
       }
 
+      setProjectStatus({ kind: 'progress', message: 'Stitching video with FFMPEG…', detail: created.folder });
+      updateToast(toastId, 'PNG sequence complete. Stitching video…', 'progress');
       const finished = await finishProjectExport(projectId, created.exportId);
-      setProjectStatus({ kind: 'success', message: 'PNG sequence exported', detail: finished.folder });
-      updateToast(toastId, `Export complete: ${finished.folder}`, 'success');
-      return finished.folder;
+      setProjectStatus({ kind: 'success', message: 'Video export complete', detail: finished.videoFile ? `${finished.folder}/${finished.videoFile}` : finished.folder });
+      updateToast(toastId, finished.videoFile ? `Export complete: ${finished.videoFile}` : `Export complete: ${finished.folder}`, 'success');
+      return finished.videoFile ? `${finished.folder}/${finished.videoFile}` : finished.folder;
     } catch (error: any) {
       if (error?.name === 'AbortError' || signal.aborted) {
         updateToast(toastId, 'Export cancelled', 'info');
@@ -1576,6 +1616,7 @@ export const App: React.FC = () => {
       }
       throw error;
     } finally {
+      capRenderer?.dispose();
       fitPreviewBack();
       startRef.current = performance.now();
       exportingRef.current = false;
@@ -1591,9 +1632,35 @@ export const App: React.FC = () => {
     videoLayerOn ? 'video' : null,
     captionsLayerOn ? 'captions' : null,
   ].filter(Boolean).join(' + ') || 'none';
-  const frameStyle: React.CSSProperties = videoInfo
-    ? { position: 'absolute', left: previewFrame.x, top: previewFrame.y, width: previewFrame.w, height: previewFrame.h }
-    : { position: 'absolute', inset: 0, width: '100%', height: '100%' };
+
+  const exportGuide = cropToGuide ? GUIDES.find((g) => g.key === activeGuide) : null;
+  const isExporting = projectStatus.kind === 'progress' && projectStatus.message.includes('Exporting');
+  
+  const frameStyle: React.CSSProperties = useMemo(() => {
+    if (!videoInfo) return { position: 'absolute', inset: 0, width: '100%', height: '100%' };
+
+    if (isExporting && exportGuide) {
+      // During export, fit the export dimensions (e.g. square) into the container
+      const r = fitRect(previewSize.w, previewSize.h, exportGuide.w, exportGuide.h);
+      return {
+        position: 'absolute',
+        left: r.x,
+        top: r.y,
+        width: r.w,
+        height: r.h,
+      };
+    }
+
+    // Normal preview: fit the source video dimensions into the container
+    return {
+      position: 'absolute',
+      left: previewFrame.x,
+      top: previewFrame.y,
+      width: previewFrame.w,
+      height: previewFrame.h,
+    };
+  }, [isExporting, exportGuide, videoInfo, previewSize, previewFrame]);
+
   const audioMode = !!audioInfo && !videoInfo;
 
   return (
@@ -1672,12 +1739,13 @@ export const App: React.FC = () => {
             ? guideRectInVideoFrame(previewFrame, videoInfo, guide)
             : previewFrame;
           return (
-            <Captions
+            <ShaderCaptions
               transcript={transcript}
               mode={captionMode}
               style={captionStyle}
               frame={captionFrame}
               timeSourceRef={mediaElRef}
+              shader={captionShader}
             />
           );
         })()}
@@ -1949,6 +2017,41 @@ export const App: React.FC = () => {
                 )}
               </Section>
               <CaptionFontControls value={captionStyle} onChange={setCaptionStyle} />
+              <Section title="Shader (sine wave)">
+                <Toggle
+                  label="enabled"
+                  value={captionShader.enabled}
+                  onChange={(enabled) => setCaptionShader({ ...captionShader, enabled })}
+                />
+                <Slider
+                  label="speed"
+                  value={captionShader.speed}
+                  min={0} max={20} step={0.1}
+                  ticks={[2, 5, 10]}
+                  onChange={(speed) => setCaptionShader({ ...captionShader, speed })}
+                />
+                <Slider
+                  label="frequency"
+                  value={captionShader.frequency}
+                  min={0} max={40} step={0.5}
+                  ticks={[4, 10, 20]}
+                  onChange={(frequency) => setCaptionShader({ ...captionShader, frequency })}
+                />
+                <Slider
+                  label="amplitude"
+                  value={captionShader.amplitude}
+                  min={0} max={0.2} step={0.001}
+                  ticks={[0.01, 0.05, 0.1]}
+                  onChange={(amplitude) => setCaptionShader({ ...captionShader, amplitude })}
+                />
+                <Slider
+                  label="angle°"
+                  value={captionShader.angleDeg}
+                  min={0} max={360} step={1}
+                  ticks={[0, 90, 180, 270]}
+                  onChange={(angleDeg) => setCaptionShader({ ...captionShader, angleDeg: Math.round(angleDeg) })}
+                />
+              </Section>
             </>
           )}
 
