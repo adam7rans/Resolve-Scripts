@@ -78,7 +78,13 @@ async function stitchVideo(projectId: string, exportId: string) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
   const { prefix, fps, startTime, duration } = manifest;
 
-  const outPath = path.join(dir, `${prefix || 'video'}.mp4`);
+  // When the background layer was OFF for the export, the PNG sequence has
+  // an alpha channel. libx264/yuv420p (the .mp4 path) cannot preserve alpha
+  // and would flatten transparent areas to black. Emit a ProRes 4444 .mov
+  // instead, which Resolve and other NLEs accept as an alpha-capable video.
+  const wantAlpha = manifest?.layers?.background === false;
+  const ext = wantAlpha ? 'mov' : 'mp4';
+  const outPath = path.join(dir, `${prefix || 'video'}.${ext}`);
   const pattern = path.join(dir, `${prefix ? prefix + '_' : '_'}%05d.png`);
 
   // Build FFMPEG command
@@ -178,14 +184,21 @@ async function stitchVideo(projectId: string, exportId: string) {
     audioMap = '-map 0:v';
   }
 
-  // -c:v libx264 -pix_fmt yuv420p is the most compatible for social media.
-  const cmd = `ffmpeg -y ${inputs}${filterComplex} ${audioMap} -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${outPath}"`;
+  // Codec selection:
+  //  - alpha export → ProRes 4444 in .mov (yuva444p10le carries alpha; PCM
+  //    audio for clean NLE ingest in Resolve/Premiere/FCP).
+  //  - opaque export → libx264/yuv420p in .mp4 (broad compatibility).
+  const videoCodec = wantAlpha
+    ? '-c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le -alpha_bits 16 -vendor apl0'
+    : '-c:v libx264 -crf 18 -pix_fmt yuv420p';
+  const audioCodec = wantAlpha ? '-c:a pcm_s16le' : '-c:a aac -b:a 192k';
+  const cmd = `ffmpeg -y ${inputs}${filterComplex} ${audioMap} ${videoCodec} ${audioCodec} -shortest "${outPath}"`;
 
-  console.log(`[export] Stitching video: ${cmd}`);
+  console.log(`[export] Stitching video (alpha=${wantAlpha}): ${cmd}`);
   try {
     await execAsync(cmd);
     console.log(`[export] Video stitched successfully: ${outPath}`);
-    return `${prefix || 'video'}.mp4`;
+    return `${prefix || 'video'}.${ext}`;
   } catch (err) {
     console.error(`[export] FFMPEG failed:`, err);
     throw err;

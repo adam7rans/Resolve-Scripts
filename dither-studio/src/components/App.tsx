@@ -20,6 +20,7 @@ import {
   VideoDistortionSection, VideoDitherSection,
 } from './ParamControls';
 import { ExportPanel } from './ExportPanel';
+import { PreviewTimeline } from './PreviewTimeline';
 import { TabBar } from './Tabs';
 import { Captions } from './Captions';
 import { ShaderCaptions } from './ShaderCaptions';
@@ -921,7 +922,44 @@ export const App: React.FC = () => {
   }, [activeProjectId]);
 
   // ---------- load project list on mount ----------
-  useEffect(() => { listProjects().then(setProjects); }, []);
+  // On mount: load the project list, then auto-select whatever project the
+  // URL points at (e.g. /may-5). Subsequent project switches update the URL
+  // via `history.replaceState` so refreshing the page keeps you on the same
+  // project.
+  useEffect(() => {
+    listProjects().then((all) => {
+      setProjects(all);
+      const slug = decodeURIComponent(window.location.pathname.replace(/^\/+/, '').replace(/\/+$/, ''));
+      if (!slug) return;
+      const match = all.find((p) => p.id === slug);
+      if (match) handleSelectProject(match.id);
+      else {
+        // unknown slug — clear it from the URL so a stale link doesn't
+        // resurface every refresh.
+        window.history.replaceState(null, '', '/');
+      }
+    });
+    // popstate handles back/forward navigation between projects.
+    const onPop = () => {
+      const slug = decodeURIComponent(window.location.pathname.replace(/^\/+/, '').replace(/\/+$/, ''));
+      if (!slug) return;
+      if (slug !== activeProjectIdRef.current) handleSelectProject(slug);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Whenever the active project changes, mirror it in the URL.
+  // Don't run on initial mount with a null project — that would wipe the
+  // slug from the URL before the auto-select effect above gets to use it.
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const target = `/${encodeURIComponent(activeProjectId)}`;
+    if (window.location.pathname !== target) {
+      window.history.replaceState(null, '', target);
+    }
+  }, [activeProjectId]);
 
   // ---------- project handlers ----------
   const handleCreateProject = async (name: string) => {
@@ -1663,21 +1701,38 @@ export const App: React.FC = () => {
 
   const audioMode = !!audioInfo && !videoInfo;
 
+  // Active export params + timeline range used by the preview-bottom timeline.
+  const timelineDuration = videoInfo?.duration ?? audioInfo?.duration ?? activeExportParams.duration ?? 10;
+  const timelineRange = resolveExportRange(activeExportParams, timelineDuration);
+  const handleTimelineRangeChange = (s: number, e: number) => {
+    setActiveExportParams({
+      ...activeExportParams,
+      startSecond: s,
+      endSecond: e,
+      duration: Math.max(0.01, e - s),
+    });
+  };
+  const handleTimelineSeek = (sec: number) => {
+    if (mediaElRef.current) handleSeekPlayhead(sec);
+    else setPlayheadSecond(sec);
+  };
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 460px', height: '100vh', minHeight: 0, overflow: 'hidden', gap: 0 }}>
-      {/* preview (left) — both layers stacked, toggles control visibility */}
+      {/* left column: preview on top, dedicated timeline at the bottom */}
+      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100vh' }}>
+      {/* preview — both layers stacked, toggles control visibility */}
       <div
         ref={previewWrapRef}
         style={{
           position: 'relative',
-          // checkerboard whenever video layer is on (so transparency is visible).
-          // when bg layer is also on, the background covers it but the video
-          // composites on top.
-          background: videoInfo
+          flex: 1,
+          // Show a transparency checkerboard whenever the background layer is
+          // off, so the alpha channel of the video/captions layer is visible.
+          // When the background layer is on it fully covers the checkerboard.
+          background: bgLayerOn
             ? '#000'
-            : videoLayerOn
-              ? `repeating-conic-gradient(#1a1a1a 0 25%, #2a2a2a 0 50%) 50% / 20px 20px`
-              : '#000',
+            : `repeating-conic-gradient(#1a1a1a 0 25%, #2a2a2a 0 50%) 50% / 20px 20px`,
           overflow: 'hidden',
           minHeight: 0,
         }}
@@ -1768,6 +1823,17 @@ export const App: React.FC = () => {
             <div style={{ fontSize: 11 }}>Drop a video or audio file here or use the panel on the right.</div>
           </div>
         )}
+      </div>
+
+      {/* dedicated preview-bottom timeline (range handles + zoom + scroll) */}
+      <PreviewTimeline
+        duration={timelineDuration}
+        start={timelineRange.start}
+        end={timelineRange.end}
+        playhead={playheadSecond}
+        onRangeChange={handleTimelineRangeChange}
+        onPlayheadChange={handleTimelineSeek}
+      />
       </div>
 
       {/* right panel */}
@@ -2105,8 +2171,6 @@ export const App: React.FC = () => {
               onChange={setActiveExportParams}
               onExport={exportComposition}
               lockedDuration={videoInfo?.duration ?? audioInfo?.duration}
-              playheadSecond={(videoInfo || audioInfo) ? playheadSecond : undefined}
-              onSeekPlayhead={(videoInfo || audioInfo) ? handleSeekPlayhead : undefined}
               layerSummary={exportLayerSummary}
             />
           )}

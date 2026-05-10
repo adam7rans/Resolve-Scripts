@@ -5,6 +5,8 @@ node_modules/
 dist/
 dither-studio/node_modules/
 dither-studio/dist/
+dither-studio/server.log
+dither-studio/*errors.txt
 __pycache__/
 *.pyc
 .DS_Store
