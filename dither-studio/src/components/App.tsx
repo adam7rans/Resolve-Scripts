@@ -24,6 +24,7 @@ import { PreviewTimeline } from './PreviewTimeline';
 import { TabBar } from './Tabs';
 import { Captions } from './Captions';
 import { ShaderCaptions } from './ShaderCaptions';
+import { CaptionsEditor } from './CaptionsEditor';
 import { parseTranscript, type CaptionMode, type TranscriptData } from '../lib/transcript';
 import { ProjectBar } from './ProjectBar';
 import { StatusToast, type Toast } from './StatusToast';
@@ -39,6 +40,7 @@ type MainTab = 'background' | 'video' | 'captions' | 'audio' | 'export';
 type BgSubTab = 'noise' | 'dither';
 type VideoSubTab = 'levels' | 'tone' | 'color' | 'distortion' | 'dither';
 type AudioSubTab = 'reactivity' | 'music';
+type CaptionsSubTab = 'captions' | 'font' | 'shader';
 
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.aac'];
 function isAudioFile(file: File): boolean {
@@ -580,6 +582,7 @@ export const App: React.FC = () => {
   const [bgSubTab, setBgSubTab] = useState<BgSubTab>('noise');
   const [videoSubTab, setVideoSubTab] = useState<VideoSubTab>('levels');
   const [audioSubTab, setAudioSubTab] = useState<AudioSubTab>('music');
+  const [captionsSubTab, setCaptionsSubTab] = useState<CaptionsSubTab>('captions');
 
   // visible layers — both can be on at once (video composites over background
   // wherever the video shader's alpha < 1)
@@ -648,6 +651,7 @@ export const App: React.FC = () => {
 
   // ---------- DOM / WebGL refs ----------
   const previewWrapRef = useRef<HTMLDivElement | null>(null);
+  const transcriptSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const bgRendererRef = useRef<BackgroundRenderer | null>(null);
@@ -1459,7 +1463,33 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // ---------- transcript file load ----------
+  // ---------- transcript file load & save ----------
+  const saveTranscript = useCallback((data: TranscriptData) => {
+    const pid = activeProjectIdRef.current;
+    if (!pid) {
+      addToast('Caption changes applied to preview only; select a project to save', 'info');
+      return;
+    }
+    setProjectStatus({ kind: 'progress', message: 'Saving caption JSON to project folder', detail: `Folder: projects/${pid}` });
+    uploadCaption(pid, data)
+      .then(() => {
+        setProjectStatus({ kind: 'success', message: 'Caption JSON saved to project folder', detail: `Folder: projects/${pid}/caption.json` });
+        listProjects().then(setProjects);
+      })
+      .catch((err) => {
+        setProjectStatus({ kind: 'error', message: `Caption save failed: ${err.message}` });
+        addToast(`Caption save failed: ${err.message}`, 'error');
+      });
+  }, [setProjects, addToast]);
+
+  const handleEditorUpdateTranscript = (data: TranscriptData) => {
+    setTranscript(data);
+    if (transcriptSaveTimerRef.current) clearTimeout(transcriptSaveTimerRef.current);
+    transcriptSaveTimerRef.current = setTimeout(() => {
+      saveTranscript(data);
+    }, 1500);
+  };
+
   const loadTranscriptFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -1468,21 +1498,7 @@ export const App: React.FC = () => {
         const data = parseTranscript(raw);
         setTranscript(data);
         setTranscriptName('caption.json');
-        const pid = activeProjectIdRef.current;
-        if (pid) {
-          setProjectStatus({ kind: 'progress', message: 'Saving caption JSON to project folder', detail: `Folder: projects/${pid}` });
-          uploadCaption(pid, raw)
-            .then(() => {
-              setProjectStatus({ kind: 'success', message: 'Caption JSON saved to project folder', detail: `Folder: projects/${pid}/caption.json` });
-              listProjects().then(setProjects);
-            })
-            .catch((err) => {
-              setProjectStatus({ kind: 'error', message: `Caption save failed: ${err.message}` });
-              addToast(`Caption save failed: ${err.message}`, 'error');
-            });
-        } else {
-          addToast('Caption loaded for preview only; select a project to save it', 'info');
-        }
+        saveTranscript(data);
       } catch (e) {
         console.error('Failed to parse transcript JSON', e);
         alert('Could not parse transcript JSON: ' + (e as Error).message);
@@ -2047,77 +2063,101 @@ export const App: React.FC = () => {
 
           {mainTab === 'captions' && (
             <>
-              <Section title="Captions">
-                {transcript ? (
-                  <>
-                    <div style={{ color: '#aaa', marginBottom: 6 }}>
-                      {transcriptName}<br />
-                      {transcript.utterances.length} utterance{transcript.utterances.length === 1 ? '' : 's'}
-                    </div>
-                    <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-                      <PillToggle label="Line mode" on={captionMode === 'line'} onClick={() => setCaptionMode('line')} />
-                      <PillToggle label="Word mode" on={captionMode === 'word'} onClick={() => setCaptionMode('word')} />
-                    </div>
-                    <label style={{
-                      display: 'inline-block', padding: '4px 10px', background: '#222',
-                      color: '#ddd', borderRadius: 3, cursor: 'pointer', fontSize: 11,
-                    }}>
-                      Replace caption JSON…
-                      <input type="file" accept="application/json,.json" onChange={onPickTranscript} style={{ display: 'none' }} />
-                    </label>
-                  </>
-                ) : (
-                  <>
-                    <div style={{ color: '#aaa', marginBottom: 8 }}>
-                      Load a caption JSON (word-level timestamps in ms — same format as
-                      <code> w3rk17/src/content/talk-transcript-trimmed.json</code>).
-                    </div>
-                    <label style={{
-                      display: 'inline-block', padding: '6px 12px', background: '#1f6feb',
-                      color: '#fff', borderRadius: 3, cursor: 'pointer',
-                    }}>
-                      Choose caption JSON…
-                      <input type="file" accept="application/json,.json" onChange={onPickTranscript} style={{ display: 'none' }} />
-                    </label>
-                  </>
-                )}
-              </Section>
-              <CaptionFontControls value={captionStyle} onChange={setCaptionStyle} />
-              <Section title="Shader (sine wave)">
-                <Toggle
-                  label="enabled"
-                  value={captionShader.enabled}
-                  onChange={(enabled) => setCaptionShader({ ...captionShader, enabled })}
-                />
-                <Slider
-                  label="speed"
-                  value={captionShader.speed}
-                  min={0} max={20} step={0.1}
-                  ticks={[2, 5, 10]}
-                  onChange={(speed) => setCaptionShader({ ...captionShader, speed })}
-                />
-                <Slider
-                  label="frequency"
-                  value={captionShader.frequency}
-                  min={0} max={40} step={0.5}
-                  ticks={[4, 10, 20]}
-                  onChange={(frequency) => setCaptionShader({ ...captionShader, frequency })}
-                />
-                <Slider
-                  label="amplitude"
-                  value={captionShader.amplitude}
-                  min={0} max={0.2} step={0.001}
-                  ticks={[0.01, 0.05, 0.1]}
-                  onChange={(amplitude) => setCaptionShader({ ...captionShader, amplitude })}
-                />
-                <Slider
-                  label="angle°"
-                  value={captionShader.angleDeg}
-                  min={0} max={360} step={1}
-                  ticks={[0, 90, 180, 270]}
-                  onChange={(angleDeg) => setCaptionShader({ ...captionShader, angleDeg: Math.round(angleDeg) })}
-                />
-              </Section>
+              <TabBar<CaptionsSubTab>
+                tabs={[
+                  { value: 'captions', label: 'Captions' },
+                  { value: 'font',     label: 'Font' },
+                  { value: 'shader',   label: 'Shader' },
+                ]}
+                value={captionsSubTab}
+                onChange={setCaptionsSubTab}
+                variant="sub"
+              />
+
+              {captionsSubTab === 'captions' && (
+                <>
+                  <Section title="Captions">
+                    {transcript ? (
+                      <>
+                        <div style={{ color: '#aaa', marginBottom: 6 }}>
+                          {transcriptName}<br />
+                          {transcript.utterances.length} utterance{transcript.utterances.length === 1 ? '' : 's'}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                          <PillToggle label="Line mode" on={captionMode === 'line'} onClick={() => setCaptionMode('line')} />
+                          <PillToggle label="Word mode" on={captionMode === 'word'} onClick={() => setCaptionMode('word')} />
+                        </div>
+                        <label style={{
+                          display: 'inline-block', padding: '4px 10px', background: '#222',
+                          color: '#ddd', borderRadius: 3, cursor: 'pointer', fontSize: 11,
+                        }}>
+                          Replace caption JSON…
+                          <input type="file" accept="application/json,.json" onChange={onPickTranscript} style={{ display: 'none' }} />
+                        </label>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ color: '#aaa', marginBottom: 8 }}>
+                          Load a caption JSON (word-level timestamps in ms — same format as
+                          <code> w3rk17/src/content/talk-transcript-trimmed.json</code>).
+                        </div>
+                        <label style={{
+                          display: 'inline-block', padding: '6px 12px', background: '#1f6feb',
+                          color: '#fff', borderRadius: 3, cursor: 'pointer',
+                        }}>
+                          Choose caption JSON…
+                          <input type="file" accept="application/json,.json" onChange={onPickTranscript} style={{ display: 'none' }} />
+                        </label>
+                      </>
+                    )}
+                  </Section>
+                  <Section title="Editor">
+                    <CaptionsEditor transcript={transcript} onUpdate={handleEditorUpdateTranscript} />
+                  </Section>
+                </>
+              )}
+
+              {captionsSubTab === 'font' && (
+                <CaptionFontControls value={captionStyle} onChange={setCaptionStyle} />
+              )}
+
+              {captionsSubTab === 'shader' && (
+                <Section title="Shader (sine wave)">
+                  <Toggle
+                    label="enabled"
+                    value={captionShader.enabled}
+                    onChange={(enabled) => setCaptionShader({ ...captionShader, enabled })}
+                  />
+                  <Slider
+                    label="speed"
+                    value={captionShader.speed}
+                    min={0} max={20} step={0.1}
+                    ticks={[2, 5, 10]}
+                    onChange={(speed) => setCaptionShader({ ...captionShader, speed })}
+                  />
+                  <Slider
+                    label="frequency"
+                    value={captionShader.frequency}
+                    min={0} max={40} step={0.5}
+                    ticks={[4, 10, 20]}
+                    onChange={(frequency) => setCaptionShader({ ...captionShader, frequency })}
+                  />
+                  <Slider
+                    label="amplitude"
+                    value={captionShader.amplitude}
+                    min={0} max={0.2} step={0.001}
+                    ticks={[0.01, 0.05, 0.1]}
+                    onChange={(amplitude) => setCaptionShader({ ...captionShader, amplitude })}
+                  />
+                  <Slider
+                    label="angle°"
+                    value={captionShader.angleDeg}
+                    min={0} max={360} step={1}
+                    ticks={[0, 90, 180, 270]}
+                    onChange={(angleDeg) => setCaptionShader({ ...captionShader, angleDeg: Math.round(angleDeg) })}
+                  />
+                </Section>
+              )}
             </>
           )}
 
