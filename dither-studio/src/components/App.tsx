@@ -79,6 +79,24 @@ function isVerticalVideo(info: { w: number; h: number } | null) {
   return !!info && info.h > info.w;
 }
 
+const CANONICAL_RESOLUTIONS = [
+  { w: 1080, h: 1920 }, // 9:16
+  { w: 1080, h: 1350 }, // 4:5
+  { w: 1080, h: 1080 }, // 1:1
+  { w: 1920, h: 1080 }, // 16:9
+] as const;
+
+function snapToExportResolution(vw: number, vh: number): { w: number; h: number } {
+  const ar = vw / vh;
+  let best: { w: number; h: number } = CANONICAL_RESOLUTIONS[0];
+  let bestDiff = Infinity;
+  for (const res of CANONICAL_RESOLUTIONS) {
+    const diff = Math.abs(ar - res.w / res.h);
+    if (diff < bestDiff) { bestDiff = diff; best = res; }
+  }
+  return best;
+}
+
 function fitRect(pw: number, ph: number, gw: number, gh: number) {
   if (pw <= 0 || ph <= 0) return { x: 0, y: 0, w: 0, h: 0 };
   const scale = Math.min(pw / gw, ph / gh);
@@ -108,9 +126,7 @@ function guideRectInVideoFrame(
   guide: { w: number; h: number },
 ) {
   if (!video) return fitRect(frame.w, frame.h, guide.w, guide.h);
-  const scale = video.h > video.w
-    ? frame.w / video.w
-    : Math.min(frame.w / guide.w, frame.h / guide.h);
+  const scale = Math.min(frame.w / guide.w, frame.h / guide.h);
   const w = guide.w * scale;
   const h = guide.h * scale;
   return {
@@ -1212,13 +1228,14 @@ export const App: React.FC = () => {
         v.muted = false; v.volume = 1; v.playsInline = true; v.preload = 'auto';
         v.addEventListener('loadedmetadata', () => {
           setVideoInfo({ name: proj.videoFile || 'video', duration: v.duration, w: v.videoWidth, h: v.videoHeight });
+          const snap = snapToExportResolution(v.videoWidth, v.videoHeight);
           setVidExport((p) => {
             const nextEnd = p.endSecond === undefined ? v.duration : Math.min(v.duration, p.endSecond);
             const nextStart = Math.min(p.startSecond, Math.max(0, nextEnd - 0.01));
             return {
               ...p,
-              width: v.videoWidth,
-              height: v.videoHeight,
+              width: snap.w,
+              height: snap.h,
               startSecond: nextStart,
               endSecond: nextEnd,
               duration: Math.max(0.01, nextEnd - nextStart),
@@ -1306,13 +1323,14 @@ export const App: React.FC = () => {
     v.muted = false; v.volume = 1; v.playsInline = true; v.preload = 'auto';
     v.addEventListener('loadedmetadata', () => {
       setVideoInfo({ name: file.name, duration: v.duration, w: v.videoWidth, h: v.videoHeight });
+      const snap = snapToExportResolution(v.videoWidth, v.videoHeight);
       setVidExport((p) => {
         const nextEnd = p.endSecond === undefined ? v.duration : Math.min(v.duration, p.endSecond);
         const nextStart = Math.min(p.startSecond, Math.max(0, nextEnd - 0.01));
         return {
           ...p,
-          width: v.videoWidth,
-          height: v.videoHeight,
+          width: snap.w,
+          height: snap.h,
           startSecond: nextStart,
           endSecond: nextEnd,
           duration: Math.max(0.01, nextEnd - nextStart),
