@@ -643,6 +643,16 @@ export const App: React.FC = () => {
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
   const [captionShader, setCaptionShader] = useState<CaptionShaderParams>(DEFAULT_CAPTION_SHADER);
 
+  // jump cuts
+  const [jumpCutsEnabled, setJumpCutsEnabled] = useState(false);
+  const [jumpCutGapMs, setJumpCutGapMs] = useState(300);
+  // user-edited overrides for individual silence gaps; key = `${baseStartMs}|${baseEndMs}` of the auto-detected gap
+  const [jumpCutGapOverrides, setJumpCutGapOverrides] = useState<Record<string, { startMs: number; endMs: number }>>({});
+  // disabled silence gaps — kept visible but not skipped during playback
+  const [jumpCutGapDisabled, setJumpCutGapDisabled] = useState<Record<string, true>>({});
+  // currently selected silence gap (for delete/restore actions)
+  const [selectedGapKey, setSelectedGapKey] = useState<string | null>(null);
+
   // composition guides — only one can be active at a time
   const [activeGuide, setActiveGuide] = useState<GuideKey | null>(null);
   const [cropToGuide, setCropToGuide] = useState(false);
@@ -708,6 +718,8 @@ export const App: React.FC = () => {
   const musicRef = useRef(music);
   const playingRef = useRef(playing);
   const playingInClipRef = useRef(false);
+  const jumpCutsEnabledRef = useRef(false);
+  const jumpCutGapListRef = useRef<Array<{ startMs: number; endMs: number; key: string }>>([]);
   const playheadRef = useRef(playheadSecond);
   const activeExportParamsRef = useRef(activeExportParams);
   const timelineDurationRef = useRef(timelineDuration);
@@ -719,6 +731,76 @@ export const App: React.FC = () => {
   useEffect(() => { playingRef.current = playing; }, [playing]);
   useEffect(() => { playheadRef.current = playheadSecond; }, [playheadSecond]);
   useEffect(() => { activeExportParamsRef.current = activeExportParams; }, [activeExportParams]);
+  useEffect(() => { jumpCutsEnabledRef.current = jumpCutsEnabled; }, [jumpCutsEnabled]);
+  const jumpCutGapsBase = useMemo(() => {
+    if (!transcript) return [] as Array<{ startMs: number; endMs: number; key: string }>;
+    const words: Array<{ start: number; end: number }> = [];
+    for (const u of transcript.utterances) {
+      if (u.words) for (const w of u.words) words.push(w);
+    }
+    words.sort((a, b) => a.start - b.start);
+    const gaps: Array<{ startMs: number; endMs: number; key: string }> = [];
+    for (let i = 0; i < words.length - 1; i++) {
+      const gapStart = words[i].end;
+      const gapEnd = words[i + 1].start;
+      if (gapEnd - gapStart >= jumpCutGapMs) {
+        gaps.push({ startMs: gapStart, endMs: gapEnd, key: `${gapStart}|${gapEnd}` });
+      }
+    }
+    return gaps;
+  }, [transcript, jumpCutGapMs]);
+  const jumpCutGaps = useMemo(() => {
+    return jumpCutGapsBase.map(g => {
+      const o = jumpCutGapOverrides[g.key];
+      return o ? { startMs: o.startMs, endMs: o.endMs, key: g.key } : g;
+    });
+  }, [jumpCutGapsBase, jumpCutGapOverrides]);
+  // RAF loop should never see disabled gaps
+  useEffect(() => {
+    jumpCutGapListRef.current = jumpCutGaps.filter(g => !jumpCutGapDisabled[g.key]);
+  }, [jumpCutGaps, jumpCutGapDisabled]);
+  const handleAdjustGap = useCallback((key: string, startMs: number, endMs: number) => {
+    setJumpCutGapOverrides(prev => ({
+      ...prev,
+      [key]: { startMs: Math.round(startMs), endMs: Math.round(endMs) },
+    }));
+  }, []);
+  const handleResetGap = useCallback((key: string) => {
+    setJumpCutGapOverrides(prev => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
+  const handleResetAllGaps = useCallback(() => {
+    setJumpCutGapOverrides({});
+    setJumpCutGapDisabled({});
+  }, []);
+  const handleToggleGapDisabled = useCallback((key: string) => {
+    setJumpCutGapDisabled(prev => {
+      const next = { ...prev };
+      if (next[key]) delete next[key];
+      else next[key] = true;
+      return next;
+    });
+  }, []);
+  const handleSelectGap = useCallback((key: string | null) => {
+    setSelectedGapKey(key);
+  }, []);
+  // Delete/Backspace to disable (or re-enable) the selected silence block
+  useEffect(() => {
+    if (!jumpCutsEnabled || !selectedGapKey) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      const ae = document.activeElement;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || (ae as HTMLElement).isContentEditable)) return;
+      e.preventDefault();
+      handleToggleGapDisabled(selectedGapKey);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [jumpCutsEnabled, selectedGapKey, handleToggleGapDisabled]);
   useEffect(() => { timelineDurationRef.current = timelineDuration; }, [timelineDuration]);
   const selectedClipRef = useRef(selectedClip);
   useEffect(() => { selectedClipRef.current = selectedClip; }, [selectedClip]);
@@ -936,6 +1018,23 @@ export const App: React.FC = () => {
           nextP = playheadRef.current + dt;
         } else {
           nextP = vTime;
+        }
+
+        // jump-cut: if the new playhead falls inside a precomputed silence gap, seek past it
+        if (jumpCutsEnabledRef.current && !v.seeking && !shouldPlayOutro) {
+          const gaps = jumpCutGapListRef.current;
+          if (gaps.length > 0) {
+            const nextMs = nextP * 1000;
+            for (const g of gaps) {
+              if (g.startMs > nextMs) break;
+              if (nextMs >= g.startMs && nextMs < g.endMs) {
+                const newSec = g.endMs / 1000;
+                try { v.currentTime = newSec; } catch {}
+                nextP = newSec;
+                break;
+              }
+            }
+          }
         }
 
         if (nextP >= limit - 0.01) {
@@ -2085,6 +2184,16 @@ export const App: React.FC = () => {
         onCancelPending={() => setPendingClipStart(null)}
         onDeleteClip={handleDeleteClip}
         onRenameClip={handleRenameClip}
+        skipGapsEnabled={jumpCutsEnabled}
+        skipGaps={jumpCutGaps}
+        skipGapOverrides={jumpCutGapOverrides}
+        skipGapDisabled={jumpCutGapDisabled}
+        selectedGapKey={selectedGapKey}
+        onSelectGap={handleSelectGap}
+        onToggleGapDisabled={handleToggleGapDisabled}
+        onAdjustSkipGap={handleAdjustGap}
+        onResetSkipGap={handleResetGap}
+        onResetAllSkipGaps={handleResetAllGaps}
       />
       </div>
 
@@ -2115,6 +2224,52 @@ export const App: React.FC = () => {
             >
               {muted ? '🔇' : '🔊'}
             </button>
+            <button
+              onClick={() => setJumpCutsEnabled((v) => !v)}
+              disabled={!transcript}
+              title={
+                !transcript
+                  ? 'Load a transcript to enable jump cuts'
+                  : jumpCutsEnabled
+                    ? 'Jump cuts ON — silences are skipped during playback'
+                    : 'Jump cuts OFF'
+              }
+              style={{
+                background: jumpCutsEnabled ? '#1f6feb' : '#1a1a1a',
+                color: !transcript ? '#444' : jumpCutsEnabled ? '#fff' : '#ddd',
+                border: '1px solid #2a2a2a',
+                padding: '4px 8px',
+                borderRadius: 3,
+                cursor: !transcript ? 'not-allowed' : 'pointer',
+                fontFamily: 'inherit',
+                opacity: !transcript ? 0.5 : 1,
+              }}
+            >
+              ✂ Skip silence
+            </button>
+            <input
+              type="number"
+              min={50}
+              step={50}
+              value={jumpCutGapMs}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (Number.isFinite(n) && n > 0) setJumpCutGapMs(Math.max(50, Math.floor(n)));
+              }}
+              disabled={!transcript || !jumpCutsEnabled}
+              title="Minimum gap between words to skip (ms)"
+              style={{
+                width: 60,
+                background: '#0d0d0d',
+                color: !transcript || !jumpCutsEnabled ? '#555' : '#ddd',
+                border: '1px solid #2a2a2a',
+                padding: '3px 6px',
+                borderRadius: 3,
+                fontFamily: 'inherit',
+                fontSize: 11,
+              }}
+            />
+            <span style={{ color: '#666', fontSize: 11 }}>ms</span>
             <span style={{ color: '#aaa', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {videoInfo?.name ?? audioInfo?.name}
             </span>

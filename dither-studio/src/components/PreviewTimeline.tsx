@@ -17,6 +17,16 @@ export interface PreviewTimelineProps {
   onCancelPending: () => void;
   onDeleteClip: (id: string) => void;
   onRenameClip: (id: string, name: string) => void;
+  skipGapsEnabled?: boolean;
+  skipGaps?: Array<{ startMs: number; endMs: number; key: string }>;
+  skipGapOverrides?: Record<string, { startMs: number; endMs: number }>;
+  skipGapDisabled?: Record<string, true>;
+  selectedGapKey?: string | null;
+  onSelectGap?: (key: string | null) => void;
+  onToggleGapDisabled?: (key: string) => void;
+  onAdjustSkipGap?: (key: string, startMs: number, endMs: number) => void;
+  onResetSkipGap?: (key: string) => void;
+  onResetAllSkipGaps?: () => void;
 }
 
 const HANDLE_W = 10;
@@ -31,7 +41,12 @@ function fmt(sec: number) {
   return `${m}:${s.toFixed(2).padStart(5, '0')}`;
 }
 
-type DragKind = null | { kind: 'clip-start' | 'clip-end'; id: string } | 'play' | 'scroll';
+type DragKind =
+  | null
+  | { kind: 'clip-start' | 'clip-end'; id: string }
+  | { kind: 'gap-start' | 'gap-end'; key: string }
+  | 'play'
+  | 'scroll';
 
 export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   duration, playhead, onPlayheadChange,
@@ -39,7 +54,11 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   microTimelines, selectedId, pendingClipStart,
   onSelectClip, onClipRangeChange,
   onAddStart, onAddEnd, onCancelPending, onDeleteClip, onRenameClip,
+  skipGapsEnabled = false, skipGaps = [],
+  skipGapOverrides = {}, onAdjustSkipGap, onResetSkipGap, onResetAllSkipGaps,
+  skipGapDisabled = {}, selectedGapKey = null, onSelectGap, onToggleGapDisabled,
 }) => {
+  const [hoverGapKey, setHoverGapKey] = useState<string | null>(null);
   const totalDuration = Math.max(0.01, duration);
   const projectDuration = totalDuration + (outroEnabled ? OUTRO_DUR : 0);
 
@@ -85,13 +104,32 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
         const newViewStart = clamp((newThumbStart / r.width) * projectDuration, 0, Math.max(0, projectDuration - viewSpan));
         setView({ s: newViewStart, e: newViewStart + viewSpan });
       } else if (dragKind && typeof dragKind === 'object') {
-        const t = timeAtClientX(e.clientX);
-        const clip = microTimelines.find(mt => mt.id === dragKind.id);
-        if (!clip) return;
-        if (dragKind.kind === 'clip-start') {
-          onClipRangeChange(dragKind.id, clamp(t, 0, clip.endSecond - 0.01), clip.endSecond);
-        } else {
-          onClipRangeChange(dragKind.id, clip.startSecond, clamp(t, clip.startSecond + 0.01, totalDuration));
+        const tMs = timeAtClientX(e.clientX) * 1000;
+        const t = tMs / 1000;
+        switch (dragKind.kind) {
+          case 'gap-start':
+          case 'gap-end': {
+            if (!onAdjustSkipGap) return;
+            const gap = skipGaps.find(g => g.key === dragKind.key);
+            if (!gap) return;
+            if (dragKind.kind === 'gap-start') {
+              onAdjustSkipGap(dragKind.key, clamp(tMs, 0, gap.endMs - 20), gap.endMs);
+            } else {
+              onAdjustSkipGap(dragKind.key, gap.startMs, clamp(tMs, gap.startMs + 20, projectDuration * 1000));
+            }
+            return;
+          }
+          case 'clip-start':
+          case 'clip-end': {
+            const clip = microTimelines.find(mt => mt.id === dragKind.id);
+            if (!clip) return;
+            if (dragKind.kind === 'clip-start') {
+              onClipRangeChange(dragKind.id, clamp(t, 0, clip.endSecond - 0.01), clip.endSecond);
+            } else {
+              onClipRangeChange(dragKind.id, clip.startSecond, clamp(t, clip.startSecond + 0.01, totalDuration));
+            }
+            return;
+          }
         }
       }
     };
@@ -104,7 +142,7 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [dragKind, viewSpan, projectDuration, totalDuration, microTimelines, onClipRangeChange, onPlayheadChange, viewStart]);
+  }, [dragKind, viewSpan, projectDuration, totalDuration, microTimelines, onClipRangeChange, onPlayheadChange, viewStart, skipGaps, onAdjustSkipGap]);
 
   const startDrag = (kind: Exclude<DragKind, null | 'scroll'>) => (e: React.PointerEvent) => {
     e.preventDefault();
@@ -172,6 +210,7 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   const visPlay = secToPct(playhead);
 
   const onTrackDown: React.PointerEventHandler<HTMLDivElement> = (e) => {
+    onSelectGap?.(null);
     onPlayheadChange(timeAtClientX(e.clientX));
     startDrag('play')(e);
   };
@@ -335,6 +374,107 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
           );
         })()}
 
+        {/* skip-silence gaps (jump cuts) */}
+        {skipGapsEnabled && skipGaps.map((g) => {
+          const startSec = g.startMs / 1000;
+          const endSec = g.endMs / 1000;
+          const l = clamp(secToPct(startSec), 0, 100);
+          const r = clamp(secToPct(endSec), 0, 100);
+          if (r <= l) return null;
+          const isOverridden = !!skipGapOverrides[g.key];
+          const isDisabled = !!skipGapDisabled[g.key];
+          const isSelected = selectedGapKey === g.key;
+          const isHover = hoverGapKey === g.key;
+          const isDraggingThis = !!dragKind && typeof dragKind === 'object'
+            && (dragKind.kind === 'gap-start' || dragKind.kind === 'gap-end')
+            && dragKind.key === g.key;
+          // color: gray if disabled, cyan if edited, orange otherwise
+          const stripeColor = isDisabled ? '140,140,140' : isOverridden ? '120,200,255' : '255,180,80';
+          const baseAlpha = isDisabled ? 0.18 : (isHover || isDraggingThis || isSelected) ? 0.5 : 0.28;
+          const handleColor = isDisabled
+            ? 'rgba(140,140,140,0.6)'
+            : isOverridden ? 'rgba(120,200,255,0.95)' : 'rgba(255,180,80,0.9)';
+          return (
+            <React.Fragment key={`gap-${g.key}`}>
+              <div
+                onPointerEnter={() => setHoverGapKey(g.key)}
+                onPointerLeave={() => setHoverGapKey(prev => (prev === g.key ? null : prev))}
+                onContextMenu={(e) => {
+                  if (isOverridden && onResetSkipGap) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onResetSkipGap(g.key);
+                  }
+                }}
+                onPointerDown={(e) => {
+                  // left-click selects this gap, also seek/drag the playhead like the empty track
+                  if (e.button !== 0) return;
+                  e.stopPropagation();
+                  onSelectGap?.(g.key);
+                  onPlayheadChange(timeAtClientX(e.clientX));
+                  startDrag('play')(e);
+                }}
+                title={
+                  `Skip silence: ${fmt(startSec)} – ${fmt(endSec)} (${(g.endMs - g.startMs).toFixed(0)}ms)` +
+                  (isDisabled ? '\nDisabled — selected + Delete to restore' : '') +
+                  (isOverridden ? '\nEdited — right-click to reset' : '\nDrag the edges to adjust')
+                }
+                style={{
+                  position: 'absolute',
+                  left: `${l}%`,
+                  width: `${r - l}%`,
+                  top: 0, bottom: 0,
+                  background:
+                    `repeating-linear-gradient(45deg, rgba(${stripeColor},${baseAlpha}) 0 4px, rgba(20,12,0,${isDisabled ? 0.3 : 0.55}) 4px 8px)`,
+                  borderLeft: `1px solid rgba(${stripeColor},${isDisabled ? 0.4 : 0.6})`,
+                  borderRight: `1px solid rgba(${stripeColor},${isDisabled ? 0.4 : 0.6})`,
+                  outline: isSelected ? `2px solid rgba(${stripeColor},1)` : 'none',
+                  outlineOffset: -1,
+                  boxShadow: isSelected ? `0 0 6px rgba(${stripeColor},0.7)` : undefined,
+                  opacity: isDisabled && !isSelected ? 0.55 : 1,
+                  cursor: 'pointer',
+                  zIndex: isSelected ? 5 : 4,
+                }}
+              />
+              {/* edge handles (hidden on disabled gaps) */}
+              {!isDisabled && (
+                <>
+                  <div
+                    onPointerDown={(e) => { e.stopPropagation(); onSelectGap?.(g.key); startDrag({ kind: 'gap-start', key: g.key })(e); }}
+                    onPointerEnter={() => setHoverGapKey(g.key)}
+                    title={`Skip-silence start: ${fmt(startSec)} — drag to adjust`}
+                    style={{
+                      position: 'absolute',
+                      left: `calc(${l}% - 3px)`,
+                      top: -2, bottom: -2, width: 6,
+                      background: handleColor,
+                      borderRadius: 2,
+                      cursor: 'ew-resize',
+                      opacity: (isHover || isDraggingThis || isSelected) ? 1 : 0.55,
+                      zIndex: 6,
+                    }}
+                  />
+                  <div
+                    onPointerDown={(e) => { e.stopPropagation(); onSelectGap?.(g.key); startDrag({ kind: 'gap-end', key: g.key })(e); }}
+                    onPointerEnter={() => setHoverGapKey(g.key)}
+                    title={`Skip-silence end: ${fmt(endSec)} — drag to adjust`}
+                    style={{
+                      position: 'absolute',
+                      left: `calc(${r}% - 3px)`,
+                      top: -2, bottom: -2, width: 6,
+                      background: handleColor,
+                      borderRadius: 2,
+                      cursor: 'ew-resize',
+                      opacity: (isHover || isDraggingThis || isSelected) ? 1 : 0.55,
+                      zIndex: 6,
+                    }}
+                  />
+                </>
+              )}
+            </React.Fragment>
+          );
+        })}
+
         {/* playhead */}
         {visPlay >= 0 && visPlay <= 100 && (
           <div style={{
@@ -452,6 +592,34 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
         <button style={btn} onClick={zoomIn} title="Zoom in">Zoom In</button>
         <button style={btn} onClick={zoomOut} title="Zoom out">Zoom Out</button>
         <button style={btn} onClick={resetView} title="Show the full duration">Reset</button>
+
+        {skipGapsEnabled && selectedGapKey && onToggleGapDisabled && (() => {
+          const isDisabled = !!skipGapDisabled[selectedGapKey];
+          return (
+            <button
+              style={{
+                ...btn,
+                borderColor: isDisabled ? '#9aa' : '#ff453a',
+                color: isDisabled ? '#ddd' : '#ff453a',
+                background: isDisabled ? '#9aa1' : '#ff453a22',
+              }}
+              onClick={() => onToggleGapDisabled(selectedGapKey)}
+              title={isDisabled ? 'Restore this silence block (will be skipped again)' : 'Delete this silence block (no longer skipped)'}
+            >
+              {isDisabled ? '↺ Restore silence' : '✕ Delete silence'}
+            </button>
+          );
+        })()}
+
+        {skipGapsEnabled && (Object.keys(skipGapOverrides).length > 0 || Object.keys(skipGapDisabled).length > 0) && onResetAllSkipGaps && (
+          <button
+            style={{ ...btn, borderColor: '#5ac8fa', color: '#5ac8fa', background: '#5ac8fa18' }}
+            onClick={onResetAllSkipGaps}
+            title="Revert all manual silence-gap edits and restore all deleted silence blocks"
+          >
+            Reset silence edits ({Object.keys(skipGapOverrides).length + Object.keys(skipGapDisabled).length})
+          </button>
+        )}
 
         {onToggleOutro && (
           <button
