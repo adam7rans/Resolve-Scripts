@@ -646,6 +646,7 @@ export const App: React.FC = () => {
   // jump cuts
   const [jumpCutsEnabled, setJumpCutsEnabled] = useState(false);
   const [jumpCutGapMs, setJumpCutGapMs] = useState(300);
+  const [jumpCutPaddingMs, setJumpCutPaddingMs] = useState(0);
   // user-edited overrides for individual silence gaps; key = `${baseStartMs}|${baseEndMs}` of the auto-detected gap
   const [jumpCutGapOverrides, setJumpCutGapOverrides] = useState<Record<string, { startMs: number; endMs: number }>>({});
   // disabled silence gaps — kept visible but not skipped during playback
@@ -755,10 +756,21 @@ export const App: React.FC = () => {
       return o ? { startMs: o.startMs, endMs: o.endMs, key: g.key } : g;
     });
   }, [jumpCutGapsBase, jumpCutGapOverrides]);
+  // Effective gaps = raw gaps with symmetrical padding applied to each side.
+  // These are the actual skip zones used for playback and export.
+  const jumpCutGapsEffective = useMemo(() => {
+    return jumpCutGaps
+      .map(g => ({
+        ...g,
+        startMs: g.startMs + jumpCutPaddingMs,
+        endMs: g.endMs - jumpCutPaddingMs,
+      }))
+      .filter(g => g.endMs - g.startMs > 20); // drop gaps that padding has consumed entirely
+  }, [jumpCutGaps, jumpCutPaddingMs]);
   // RAF loop should never see disabled gaps
   useEffect(() => {
-    jumpCutGapListRef.current = jumpCutGaps.filter(g => !jumpCutGapDisabled[g.key]);
-  }, [jumpCutGaps, jumpCutGapDisabled]);
+    jumpCutGapListRef.current = jumpCutGapsEffective.filter(g => !jumpCutGapDisabled[g.key]);
+  }, [jumpCutGapsEffective, jumpCutGapDisabled]);
   const handleAdjustGap = useCallback((key: string, startMs: number, endMs: number) => {
     setJumpCutGapOverrides(prev => ({
       ...prev,
@@ -2240,6 +2252,7 @@ export const App: React.FC = () => {
         onRenameClip={handleRenameClip}
         skipGapsEnabled={jumpCutsEnabled}
         skipGaps={jumpCutGaps}
+        skipGapsEffective={jumpCutGapsEffective}
         skipGapOverrides={jumpCutGapOverrides}
         skipGapDisabled={jumpCutGapDisabled}
         selectedGapKey={selectedGapKey}
@@ -2324,6 +2337,22 @@ export const App: React.FC = () => {
               }}
             />
             <span style={{ color: '#666', fontSize: 11 }}>ms</span>
+            <span style={{ color: '#555', fontSize: 11, marginLeft: 4 }}>|</span>
+            <span style={{ color: !transcript || !jumpCutsEnabled ? '#555' : '#888', fontSize: 11, whiteSpace: 'nowrap' }}>tighten</span>
+            <input
+              type="range"
+              min={0}
+              max={1000}
+              step={50}
+              value={jumpCutPaddingMs}
+              onChange={(e) => setJumpCutPaddingMs(Number(e.target.value))}
+              disabled={!transcript || !jumpCutsEnabled}
+              title={`Shrink each skip zone by ${jumpCutPaddingMs}ms on each side`}
+              style={{ width: 80, accentColor: '#1f6feb', opacity: !transcript || !jumpCutsEnabled ? 0.3 : 1 }}
+            />
+            <span style={{ color: !transcript || !jumpCutsEnabled ? '#555' : '#aaa', fontSize: 11, minWidth: 36 }}>
+              ±{jumpCutPaddingMs}ms
+            </span>
             <span style={{ color: '#aaa', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {videoInfo?.name ?? audioInfo?.name}
             </span>

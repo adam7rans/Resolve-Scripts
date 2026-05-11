@@ -19,6 +19,8 @@ export interface PreviewTimelineProps {
   onRenameClip: (id: string, name: string) => void;
   skipGapsEnabled?: boolean;
   skipGaps?: Array<{ startMs: number; endMs: number; key: string }>;
+  /** Effective skip zones after padding is applied — drawn as bright inner stripe */
+  skipGapsEffective?: Array<{ startMs: number; endMs: number; key: string }>;
   skipGapOverrides?: Record<string, { startMs: number; endMs: number }>;
   skipGapDisabled?: Record<string, true>;
   selectedGapKey?: string | null;
@@ -54,7 +56,7 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   microTimelines, selectedId, pendingClipStart,
   onSelectClip, onClipRangeChange,
   onAddStart, onAddEnd, onCancelPending, onDeleteClip, onRenameClip,
-  skipGapsEnabled = false, skipGaps = [],
+  skipGapsEnabled = false, skipGaps = [], skipGapsEffective = [],
   skipGapOverrides = {}, onAdjustSkipGap, onResetSkipGap, onResetAllSkipGaps,
   skipGapDisabled = {}, selectedGapKey = null, onSelectGap, onToggleGapDisabled,
 }) => {
@@ -472,6 +474,34 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
                 </>
               )}
             </React.Fragment>
+          );
+        })}
+
+        {/* effective skip zones (after padding) — bright solid inner stripe */}
+        {skipGapsEnabled && skipGapsEffective.map((g) => {
+          if (skipGapDisabled[g.key]) return null;
+          const startSec = g.startMs / 1000;
+          const endSec = g.endMs / 1000;
+          const l = clamp(secToPct(startSec), 0, 100);
+          const r = clamp(secToPct(endSec), 0, 100);
+          if (r <= l) return null;
+          const isOverridden = !!skipGapOverrides[g.key];
+          const stripeColor = isOverridden ? '120,200,255' : '255,180,80';
+          return (
+            <div
+              key={`eff-${g.key}`}
+              title={`Effective skip: ${fmt(startSec)} – ${fmt(endSec)}`}
+              style={{
+                position: 'absolute',
+                left: `${l}%`,
+                width: `${r - l}%`,
+                top: '30%', bottom: '30%',
+                background: `rgba(${stripeColor},0.55)`,
+                borderRadius: 2,
+                pointerEvents: 'none',
+                zIndex: 4,
+              }}
+            />
           );
         })}
 
