@@ -3,15 +3,17 @@ import { Section, Slider, Toggle, ColorInput, Select } from './Controls';
 import type { BackgroundParams, DitherParams, VideoShaderParams } from '../lib/types';
 import { DITHER_TYPES } from '../shaders/ditherShader';
 
+interface WithReset { onReset?: () => void }
+
 const DITHER_OPTIONS = Object.entries(DITHER_TYPES).map(([k, v]) => ({
   label: k.replace(/_/g, ' ').toLowerCase(),
   value: v,
 }));
 
-export const DitherControls: React.FC<{ value: DitherParams; onChange: (v: DitherParams) => void }> = ({ value, onChange }) => {
+export const DitherControls: React.FC<{ value: DitherParams; onChange: (v: DitherParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
   const set = (patch: Partial<DitherParams>) => onChange({ ...value, ...patch });
   return (
-    <Section title="Dither">
+    <Section title="Dither" onReset={onReset}>
       <Toggle label="enabled" value={value.enabled} onChange={(v) => set({ enabled: v })} />
       <Select
         label="type"
@@ -30,10 +32,10 @@ export const DitherControls: React.FC<{ value: DitherParams; onChange: (v: Dithe
   );
 };
 
-export const BackgroundControls: React.FC<{ value: BackgroundParams; onChange: (v: BackgroundParams) => void }> = ({ value, onChange }) => {
+export const BackgroundControls: React.FC<{ value: BackgroundParams; onChange: (v: BackgroundParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
   const set = (patch: Partial<BackgroundParams>) => onChange({ ...value, ...patch });
   return (
-    <Section title="Background noise">
+    <Section title="Background noise" onReset={onReset}>
       <Select
         label="noise type"
         value={value.noiseType}
@@ -69,10 +71,10 @@ export const BackgroundControls: React.FC<{ value: BackgroundParams; onChange: (
 
 const RAD_PER_DEG = Math.PI / 180;
 
-export const VideoLevelsSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void }> = ({ value, onChange }) => {
+export const VideoLevelsSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
   const set = (patch: Partial<VideoShaderParams>) => onChange({ ...value, ...patch });
   return (
-    <Section title="Levels">
+    <Section title="Levels" onReset={onReset}>
       <Slider label="black point" value={value.blackPoint} min={0} max={0.5} step={0.005} onChange={(v) => set({ blackPoint: v })} />
       <Slider label="white point" value={value.whitePoint} min={0.5} max={1} step={0.005} onChange={(v) => set({ whitePoint: v })} />
       <Slider label="brightness" value={value.brightness} min={0} max={3} step={0.01} onChange={(v) => set({ brightness: v })} />
@@ -81,10 +83,10 @@ export const VideoLevelsSection: React.FC<{ value: VideoShaderParams; onChange: 
   );
 };
 
-export const VideoToneSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void }> = ({ value, onChange }) => {
+export const VideoToneSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
   const set = (patch: Partial<VideoShaderParams>) => onChange({ ...value, ...patch });
   return (
-    <Section title="Tone">
+    <Section title="Tone" onReset={onReset}>
       <Slider label="shadows" value={value.shadows} min={-0.5} max={0.5} step={0.01} onChange={(v) => set({ shadows: v })} />
       <Slider label="midtones" value={value.midtones} min={-0.5} max={0.5} step={0.01} onChange={(v) => set({ midtones: v })} />
       <Slider label="highlights" value={value.highlights} min={-0.5} max={0.5} step={0.01} onChange={(v) => set({ highlights: v })} />
@@ -92,10 +94,10 @@ export const VideoToneSection: React.FC<{ value: VideoShaderParams; onChange: (v
   );
 };
 
-export const VideoColorSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void }> = ({ value, onChange }) => {
+export const VideoColorSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
   const set = (patch: Partial<VideoShaderParams>) => onChange({ ...value, ...patch });
   return (
-    <Section title="Color">
+    <Section title="Color" onReset={onReset}>
       <Slider label="exposure" value={value.exposure} min={-3} max={3} step={0.05} onChange={(v) => set({ exposure: v })} />
       <Slider label="gamma" value={value.gamma} min={0.2} max={3} step={0.01} onChange={(v) => set({ gamma: v })} />
       <Slider label="saturation" value={value.saturation} min={0} max={3} step={0.01} onChange={(v) => set({ saturation: v })} />
@@ -104,10 +106,10 @@ export const VideoColorSection: React.FC<{ value: VideoShaderParams; onChange: (
   );
 };
 
-export const VideoDistortionSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void }> = ({ value, onChange }) => {
+export const VideoDistortionSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
   const set = (patch: Partial<VideoShaderParams>) => onChange({ ...value, ...patch });
   return (
-    <Section title="Distortion (UV)">
+    <Section title="Distortion (UV)" onReset={onReset}>
       <Slider
         label="rotation°"
         value={value.rotation / RAD_PER_DEG}
@@ -123,10 +125,10 @@ export const VideoDistortionSection: React.FC<{ value: VideoShaderParams; onChan
   );
 };
 
-export const VideoDitherSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void }> = ({ value, onChange }) => {
+export const VideoDitherSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
   const set = (patch: Partial<VideoShaderParams>) => onChange({ ...value, ...patch });
   return (
-    <Section title="Dither">
+    <Section title="Dither" onReset={onReset}>
       <Toggle label="enabled" value={value.ditherEnabled} onChange={(v) => set({ ditherEnabled: v })} />
       <Select
         label="type"

@@ -1,10 +1,33 @@
 import React from 'react';
 
-export const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+export const Section: React.FC<{ title: string; onReset?: () => void; children: React.ReactNode }> = ({ title, onReset, children }) => (
   <div style={{
     border: '1px solid #222', borderRadius: 4, padding: 10, marginBottom: 10, background: '#141414',
   }}>
-    <div style={{ color: '#888', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>{title}</div>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+      <div style={{ color: '#888', textTransform: 'uppercase', letterSpacing: 1 }}>{title}</div>
+      {onReset && (
+        <button
+          onClick={onReset}
+          style={{
+            padding: '2px 8px',
+            background: 'transparent',
+            color: '#666',
+            border: '1px solid #333',
+            borderRadius: 3,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            fontSize: 10,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = '#aaa'; e.currentTarget.style.borderColor = '#555'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = '#666'; e.currentTarget.style.borderColor = '#333'; }}
+        >
+          Restore
+        </button>
+      )}
+    </div>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{children}</div>
   </div>
 );

@@ -206,6 +206,48 @@ export const DEFAULT_VIDEO: VideoShaderParams = {
   darkModeColor: '#666eae',  // [0.40, 0.43, 0.68]
 };
 
+export const DEFAULT_VIDEO_LEVELS: Partial<VideoShaderParams> = {
+  blackPoint: DEFAULT_VIDEO.blackPoint,
+  whitePoint: DEFAULT_VIDEO.whitePoint,
+  brightness: DEFAULT_VIDEO.brightness,
+  contrast: DEFAULT_VIDEO.contrast,
+};
+
+export const DEFAULT_VIDEO_TONE: Partial<VideoShaderParams> = {
+  shadows: DEFAULT_VIDEO.shadows,
+  midtones: DEFAULT_VIDEO.midtones,
+  highlights: DEFAULT_VIDEO.highlights,
+};
+
+export const DEFAULT_VIDEO_COLOR: Partial<VideoShaderParams> = {
+  exposure: DEFAULT_VIDEO.exposure,
+  gamma: DEFAULT_VIDEO.gamma,
+  saturation: DEFAULT_VIDEO.saturation,
+  clarity: DEFAULT_VIDEO.clarity,
+};
+
+export const DEFAULT_VIDEO_DISTORTION: Partial<VideoShaderParams> = {
+  rotation: DEFAULT_VIDEO.rotation,
+  scale: DEFAULT_VIDEO.scale,
+  distortionFrequency: DEFAULT_VIDEO.distortionFrequency,
+  distortionAmplitude: DEFAULT_VIDEO.distortionAmplitude,
+  distortionSpeed: DEFAULT_VIDEO.distortionSpeed,
+  distortionAngle: DEFAULT_VIDEO.distortionAngle,
+};
+
+export const DEFAULT_VIDEO_DITHER: Partial<VideoShaderParams> = {
+  ditherEnabled: DEFAULT_VIDEO.ditherEnabled,
+  ditherType: DEFAULT_VIDEO.ditherType,
+  ditherScale: DEFAULT_VIDEO.ditherScale,
+  threshold: DEFAULT_VIDEO.threshold,
+  alphaThreshold: DEFAULT_VIDEO.alphaThreshold,
+  useSingleColor: DEFAULT_VIDEO.useSingleColor,
+  isDarkMode: DEFAULT_VIDEO.isDarkMode,
+  ditherColor: DEFAULT_VIDEO.ditherColor,
+  lightModeColor: DEFAULT_VIDEO.lightModeColor,
+  darkModeColor: DEFAULT_VIDEO.darkModeColor,
+};
+
 export const DEFAULT_EXPORT: ExportParams = {
   width: 1920,
   height: 1080,

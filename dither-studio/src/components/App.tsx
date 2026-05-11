@@ -7,6 +7,8 @@ import { MusicPlayer, DEFAULT_MUSIC_PARAMS, type MusicParams } from '../lib/Musi
 import {
   DEFAULT_BACKGROUND, DEFAULT_DITHER, DEFAULT_VIDEO, DEFAULT_EXPORT,
   DEFAULT_CAPTION_STYLE, DEFAULT_AUDIO_REACTIVITY, DEFAULT_CAPTION_SHADER,
+  DEFAULT_VIDEO_LEVELS, DEFAULT_VIDEO_TONE, DEFAULT_VIDEO_COLOR,
+  DEFAULT_VIDEO_DISTORTION, DEFAULT_VIDEO_DITHER,
   type BackgroundParams, type DitherParams, type VideoShaderParams, type ExportParams, type CaptionStyle,
   type AudioReactivityParams, type CaptionShaderParams,
 } from '../lib/types';
@@ -177,10 +179,10 @@ const ProjectStatusPanel: React.FC<{ project: ProjectMeta | undefined; status: P
     </div>
   );
 };
-const CaptionFontControls: React.FC<{ value: CaptionStyle; onChange: (v: CaptionStyle) => void }> = ({ value, onChange }) => {
+const CaptionFontControls: React.FC<{ value: CaptionStyle; onChange: (v: CaptionStyle) => void; onReset?: () => void }> = ({ value, onChange, onReset }) => {
   const set = (patch: Partial<CaptionStyle>) => onChange({ ...value, ...patch });
   return (
-    <Section title="Caption font">
+    <Section title="Caption font" onReset={onReset}>
       <Select
         label="family"
         value={value.fontFamily}
@@ -2145,8 +2147,8 @@ export const App: React.FC = () => {
                 onChange={setBgSubTab}
                 variant="sub"
               />
-              {bgSubTab === 'noise' && <BackgroundControls value={bg} onChange={setBg} />}
-              {bgSubTab === 'dither' && <DitherControls value={bgDither} onChange={setBgDither} />}
+              {bgSubTab === 'noise' && <BackgroundControls value={bg} onChange={setBg} onReset={() => setBg(DEFAULT_BACKGROUND)} />}
+              {bgSubTab === 'dither' && <DitherControls value={bgDither} onChange={setBgDither} onReset={() => setBgDither(DEFAULT_DITHER)} />}
             </>
           )}
 
@@ -2198,8 +2200,29 @@ export const App: React.FC = () => {
                           }}
                         />
                       </Section>
-                      <div style={{ color: '#888', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
-                        Shader
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                        <div style={{ color: '#888', textTransform: 'uppercase', letterSpacing: 1 }}>
+                          Shader
+                        </div>
+                        <button
+                          onClick={() => setVid(DEFAULT_VIDEO)}
+                          style={{
+                            padding: '2px 8px',
+                            background: 'transparent',
+                            color: '#666',
+                            border: '1px solid #333',
+                            borderRadius: 3,
+                            cursor: 'pointer',
+                            fontFamily: 'inherit',
+                            fontSize: 10,
+                            textTransform: 'uppercase',
+                            letterSpacing: 0.5,
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.color = '#aaa'; e.currentTarget.style.borderColor = '#555'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.color = '#666'; e.currentTarget.style.borderColor = '#333'; }}
+                        >
+                          Restore all
+                        </button>
                       </div>
                       <TabBar<VideoSubTab>
                         tabs={[
@@ -2213,11 +2236,11 @@ export const App: React.FC = () => {
                         onChange={setVideoSubTab}
                         variant="sub"
                       />
-                      {videoSubTab === 'levels' && <VideoLevelsSection value={vid} onChange={setVid} />}
-                      {videoSubTab === 'tone' && <VideoToneSection value={vid} onChange={setVid} />}
-                      {videoSubTab === 'color' && <VideoColorSection value={vid} onChange={setVid} />}
-                      {videoSubTab === 'distortion' && <VideoDistortionSection value={vid} onChange={setVid} />}
-                      {videoSubTab === 'dither' && <VideoDitherSection value={vid} onChange={setVid} />}
+                      {videoSubTab === 'levels' && <VideoLevelsSection value={vid} onChange={setVid} onReset={() => setVid(v => ({ ...v, ...DEFAULT_VIDEO_LEVELS }))} />}
+                      {videoSubTab === 'tone' && <VideoToneSection value={vid} onChange={setVid} onReset={() => setVid(v => ({ ...v, ...DEFAULT_VIDEO_TONE }))} />}
+                      {videoSubTab === 'color' && <VideoColorSection value={vid} onChange={setVid} onReset={() => setVid(v => ({ ...v, ...DEFAULT_VIDEO_COLOR }))} />}
+                      {videoSubTab === 'distortion' && <VideoDistortionSection value={vid} onChange={setVid} onReset={() => setVid(v => ({ ...v, ...DEFAULT_VIDEO_DISTORTION }))} />}
+                      {videoSubTab === 'dither' && <VideoDitherSection value={vid} onChange={setVid} onReset={() => setVid(v => ({ ...v, ...DEFAULT_VIDEO_DITHER }))} />}
                     </>
                   )}
                 </>
@@ -2282,11 +2305,11 @@ export const App: React.FC = () => {
               )}
 
               {captionsSubTab === 'font' && (
-                <CaptionFontControls value={captionStyle} onChange={setCaptionStyle} />
+                <CaptionFontControls value={captionStyle} onChange={setCaptionStyle} onReset={() => setCaptionStyle(DEFAULT_CAPTION_STYLE)} />
               )}
 
               {captionsSubTab === 'shader' && (
-                <Section title="Shader (sine wave)">
+                <Section title="Shader (sine wave)" onReset={() => setCaptionShader(DEFAULT_CAPTION_SHADER)}>
                   <Toggle
                     label="enabled"
                     value={captionShader.enabled}
