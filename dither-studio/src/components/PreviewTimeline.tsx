@@ -174,15 +174,13 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   };
 
   const zoomIn = () => {
-    const center = (viewStart + viewEnd) / 2;
     const newSpan = Math.max(MIN_VIEW_SEC, viewSpan / 2);
-    setViewClamped(center - newSpan / 2, center + newSpan / 2);
+    setViewClamped(playhead - newSpan / 2, playhead + newSpan / 2);
   };
 
   const zoomOut = () => {
-    const center = (viewStart + viewEnd) / 2;
     const newSpan = Math.min(projectDuration, viewSpan * 2);
-    setViewClamped(center - newSpan / 2, center + newSpan / 2);
+    setViewClamped(playhead - newSpan / 2, playhead + newSpan / 2);
   };
 
   const resetView = () => setView({ s: 0, e: projectDuration });
