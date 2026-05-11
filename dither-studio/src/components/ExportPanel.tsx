@@ -12,6 +12,7 @@ export interface ExportPanelProps {
   lockedDuration?: number;
   exportLabel?: string;
   layerSummary?: string;
+  clipName?: string;
 }
 
 function clamp(v: number, min: number, max: number) {
@@ -19,7 +20,7 @@ function clamp(v: number, min: number, max: number) {
 }
 
 export const ExportPanel: React.FC<ExportPanelProps> = ({
-  params, onChange, onExport, lockedDuration, exportLabel = 'Export PNG sequence', layerSummary,
+  params, onChange, onExport, lockedDuration, exportLabel = 'Export PNG sequence', layerSummary, clipName,
 }) => {
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -98,6 +99,7 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
         Set the time range using the timeline beneath the preview.
       </div>
       {layerSummary && <div style={{ marginTop: 4, color: '#777', lineHeight: 1.4 }}>Layers: {layerSummary}</div>}
+      {clipName && <div style={{ marginTop: 4, color: '#1f6feb', fontSize: 11 }}>Exporting: {clipName}</div>}
 
       <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
         <button

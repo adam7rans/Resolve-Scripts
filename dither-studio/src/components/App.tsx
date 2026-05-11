@@ -9,8 +9,9 @@ import {
   DEFAULT_CAPTION_STYLE, DEFAULT_AUDIO_REACTIVITY, DEFAULT_CAPTION_SHADER,
   DEFAULT_VIDEO_LEVELS, DEFAULT_VIDEO_TONE, DEFAULT_VIDEO_COLOR,
   DEFAULT_VIDEO_DISTORTION, DEFAULT_VIDEO_DITHER,
+  MICRO_TIMELINE_COLORS,
   type BackgroundParams, type DitherParams, type VideoShaderParams, type ExportParams, type CaptionStyle,
-  type AudioReactivityParams, type CaptionShaderParams,
+  type AudioReactivityParams, type CaptionShaderParams, type MicroTimeline,
 } from '../lib/types';
 import { PRESETS, VIDEO_PRESETS } from '../lib/presets';
 import { canvasToPngBlob, frameNumber, seekVideoTo } from '../lib/exporter';
@@ -642,6 +643,12 @@ export const App: React.FC = () => {
   const [videoInfo, setVideoInfo] = useState<{ name: string; duration: number; w: number; h: number } | null>(null);
   const [playing, setPlaying] = useState(false);
   const [playheadSecond, setPlayheadSecond] = useState(0);
+  // Media time (ms) at which the current playback run started. Used by captions
+  // to suppress retroactive hold+fade for captions that ended before playback began.
+  const [playbackStartMs, setPlaybackStartMs] = useState<number | undefined>(undefined);
+  const [microTimelines, setMicroTimelines] = useState<MicroTimeline[]>([]);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [pendingClipStart, setPendingClipStart] = useState<number | null>(null);
   const [muted, setMuted] = useState(false);
   // Volume for the main video/audio element (the "video" track in the Mixer).
   const [mediaVolume, setMediaVolume] = useState(1);
@@ -657,8 +664,18 @@ export const App: React.FC = () => {
   useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
 
   // Derived state
-  const activeExportParams = videoInfo ? vidExport : bgExport;
-  const setActiveExportParams = videoInfo ? setVidExport : setBgExport;
+  const baseExportParams = videoInfo ? vidExport : bgExport;
+  const setBaseExportParams = videoInfo ? setVidExport : setBgExport;
+  const selectedClip = microTimelines.find(mt => mt.id === selectedClipId) ?? null;
+  const activeExportParams = selectedClip
+    ? {
+        ...baseExportParams,
+        startSecond: selectedClip.startSecond,
+        endSecond: selectedClip.endSecond,
+        filenamePrefix: selectedClip.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || baseExportParams.filenamePrefix,
+      }
+    : baseExportParams;
+  const setActiveExportParams = setBaseExportParams;
   const mediaDuration = videoInfo?.duration ?? audioInfo?.duration ?? activeExportParams.duration ?? 10;
   const timelineDuration = mediaDuration + (activeExportParams.outroEnabled ? 5 : 0);
   const timelineRange = resolveExportRange(activeExportParams, mediaDuration);
@@ -686,6 +703,8 @@ export const App: React.FC = () => {
   useEffect(() => { playheadRef.current = playheadSecond; }, [playheadSecond]);
   useEffect(() => { activeExportParamsRef.current = activeExportParams; }, [activeExportParams]);
   useEffect(() => { timelineDurationRef.current = timelineDuration; }, [timelineDuration]);
+  const selectedClipRef = useRef(selectedClip);
+  useEffect(() => { selectedClipRef.current = selectedClip; }, [selectedClip]);
 
   // ---------- toasts ----------
   const toastCounter = useRef(0);
@@ -857,43 +876,28 @@ export const App: React.FC = () => {
     setActiveGuide(null);
     setCropToGuide(false);
   }, [verticalVideo, activeGuide]);
+  // Playhead is no longer clamped to the export range — the user can freely
+  // scrub across the full media duration. Clip boundaries only affect where
+  // playback *stops*, not where the playhead is allowed to be.
   useEffect(() => {
     const v = mediaElRef.current;
     const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? null;
-    const params = videoInfo ? vidExport : bgExport;
-    if (!v || !totalDuration) return;
-    const { start, end, outroDuration } = resolveExportRange(params, totalDuration);
-    const limit = end + outroDuration;
-    const current = v.currentTime || 0;
-    
-    // Clamp media element time to [start, end]
-    if (current < start || current > end) {
-      v.currentTime = clamp(current, start, end);
-    }
-    
-    // Clamp logical playhead to [start, limit]
-    if (playheadSecond < start || playheadSecond > limit) {
-      setPlayheadSecond(clamp(playheadSecond, start, limit));
-    }
-  }, [videoInfo, audioInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration, bgExport.startSecond, bgExport.endSecond, bgExport.duration, vidExport.outroEnabled, bgExport.outroEnabled]);
-  useEffect(() => {
-    const v = mediaElRef.current;
-    const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? null;
-    const params = videoInfo ? vidExport : bgExport;
     if (!v || !totalDuration) return;
     let raf: number | null = null;
     let lastT = performance.now();
     const tick = () => {
-      const { end, outroDuration } = resolveExportRange(params, totalDuration);
-      const limit = end + outroDuration;
+      const clip = selectedClipRef.current;
+      const params = activeExportParamsRef.current;
+      const outroDuration = params.outroEnabled ? 5 : 0;
+      const clipEnd = clip ? clip.endSecond : totalDuration;
+      const limit = clipEnd + (clip ? outroDuration : 0);
       const vTime = v.currentTime || 0;
-      
+
       const now = performance.now();
       const dt = (now - lastT) / 1000;
       lastT = now;
 
-      // Handle outro sound: only play if the global "playing" state is true AND we are in the outro range
-      const isOutroRange = outroDuration > 0 && playheadRef.current >= end && playheadRef.current < limit - 0.02;
+      const isOutroRange = clip && outroDuration > 0 && playheadRef.current >= clipEnd && playheadRef.current < limit - 0.02;
       const shouldPlayOutro = playingRef.current && isOutroRange;
 
       if (shouldPlayOutro) {
@@ -910,7 +914,7 @@ export const App: React.FC = () => {
 
       if (playingRef.current) {
         let nextP: number;
-        if (outroDuration > 0 && playheadRef.current >= end - 0.01) {
+        if (clip && outroDuration > 0 && playheadRef.current >= clipEnd - 0.01) {
           nextP = playheadRef.current + dt;
         } else {
           nextP = vTime;
@@ -932,11 +936,8 @@ export const App: React.FC = () => {
           playheadRef.current = nextP;
         }
       } else {
-        // When paused, sync playhead with media element UNLESS we are in the outro
-        if (playheadRef.current <= end + 0.01) {
-          if (Math.abs(vTime - playheadRef.current) > 0.02) {
-            setPlayheadSecond(vTime);
-          }
+        if (!v.seeking && Math.abs(vTime - playheadRef.current) > 0.02) {
+          setPlayheadSecond(vTime);
         }
       }
       raf = requestAnimationFrame(tick);
@@ -945,7 +946,7 @@ export const App: React.FC = () => {
     return () => {
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [videoInfo, audioInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration, bgExport.startSecond, bgExport.endSecond, bgExport.duration, outroVolume]);
+  }, [videoInfo, audioInfo, outroVolume]);
 
   // ---------- auto-save settings to active project ----------
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -959,10 +960,11 @@ export const App: React.FC = () => {
         captionMode, captionStyle, captionShader,
         layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn, music: musicLayerOn },
         activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
+        microTimelines, selectedClipId,
         ui: { mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume },
       }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume]);
+  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, microTimelines, selectedClipId, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume]);
 
   // ---------- SSE stream for transcription progress ----------
   useEffect(() => {
@@ -1192,6 +1194,14 @@ export const App: React.FC = () => {
       if (proj.cropToGuide !== undefined) setCropToGuide(proj.cropToGuide);
       if (proj.exportBackground) setBgExport(proj.exportBackground);
       if (proj.exportVideo) setVidExport(proj.exportVideo);
+      if (proj.microTimelines?.length) {
+        setMicroTimelines(proj.microTimelines);
+        setSelectedClipId(proj.selectedClipId ?? proj.microTimelines[0]?.id ?? null);
+      } else {
+        setMicroTimelines([]);
+        setSelectedClipId(null);
+      }
+      setPendingClipStart(null);
       // load video if present
       if (proj.hasVideo) {
         const url = getVideoUrl(id);
@@ -1479,33 +1489,36 @@ export const App: React.FC = () => {
       return;
     }
     const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? v.duration;
-    const params = videoInfo ? vidExport : bgExport;
-    const { start, end } = resolveExportRange(params, totalDuration);
     if (v.paused) {
-      // Audio Web Audio context needs to be resumed from a user gesture.
       audioSourceRef.current?.ensureGraph();
       audioSourceRef.current?.resume();
-      // Same for the music graph.
       musicPlayerRef.current?.ensureGraph();
       musicPlayerRef.current?.resume();
       musicPlayerRef.current?.setVolume(music.volume, music.muted || !musicLayerOn);
       const cur = v.currentTime || 0;
-      let target = clamp(cur, start, end);
-      if (cur >= end - 0.001 || cur < start) target = start;
+      let target = cur;
+      const clip = selectedClip;
+      if (clip) {
+        const clipEnd = clip.endSecond + (activeExportParams.outroEnabled ? 5 : 0);
+        if (cur >= clip.endSecond - 0.001 || cur < clip.startSecond) target = clip.startSecond;
+      } else {
+        if (cur >= totalDuration - 0.001) target = 0;
+      }
       setPlayheadSecond(target);
+      setPlaybackStartMs(target * 1000);
+      const clipStart = clip?.startSecond ?? 0;
       const startPlayback = () => {
         const p = v.play();
         if (p && typeof p.catch === 'function') p.catch(() => setPlaying(false));
-        // Start music alongside speech (its own free-running time, looped).
-         const mEl = musicElRef.current;
-         if (mEl && musicLayerOn) {
-           // Align music 0:00 with the start handle
-           if (mEl.duration > 0) {
-             mEl.currentTime = (target - start) % mEl.duration;
-           }
-           mEl.play().catch(() => {});
-         }
-        setPlaying(true);      };
+        const mEl = musicElRef.current;
+        if (mEl && musicLayerOn) {
+          if (mEl.duration > 0) {
+            mEl.currentTime = (target - clipStart) % mEl.duration;
+          }
+          mEl.play().catch(() => {});
+        }
+        setPlaying(true);
+      };
       if (Math.abs((v.currentTime || 0) - target) > 0.001) {
         const onSeeked = () => { v.removeEventListener('seeked', onSeeked); startPlayback(); };
         v.addEventListener('seeked', onSeeked);
@@ -1525,12 +1538,10 @@ export const App: React.FC = () => {
     const v = mediaElRef.current;
     if (!v) return;
     const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? v.duration;
-    const params = videoInfo ? vidExport : bgExport;
-    const { start, end, outroDuration } = resolveExportRange(params, totalDuration);
-    const limit = end + outroDuration;
-    const target = clamp(second, start, limit);
-    v.currentTime = Math.min(target, end);
+    const target = clamp(second, 0, totalDuration);
+    v.currentTime = target;
     setPlayheadSecond(target);
+    setPlaybackStartMs(target * 1000);
   };
 
   // ---------- keyboard shortcuts: space = play/pause, m = mute/unmute ----------
@@ -1634,7 +1645,7 @@ export const App: React.FC = () => {
     const videoRenderer = videoRendererRef.current;
     const video = videoElRef.current;
     const audio = audioSourceRef.current;
-    const params = videoInfo ? vidExport : bgExport;
+    const params = activeExportParamsRef.current;
     const sourceDuration = videoInfo?.duration ?? audioInfo?.duration ?? null;
     const range = resolveExportRange(params, sourceDuration);
     if (videoLayerOn && (!videoRenderer || !video)) throw new Error('Load a video before exporting the video layer.');
@@ -1741,7 +1752,7 @@ export const App: React.FC = () => {
             const capCtx = capOffscreen.getContext('2d');
             if (capCtx) {
                capCtx.clearRect(0, 0, width, height);
-               drawCaptionsToCanvas(capCtx, transcript, captionMode, t * 1000, width, height, captionStyle, capScale);
+               drawCaptionsToCanvas(capCtx, transcript, captionMode, t * 1000, width, height, captionStyle, capScale, range.start * 1000);
                capRenderer.render(capOffscreen, captionShader, t);
                ctx.globalAlpha = capOpacity;
                ctx.drawImage(capRenderer.canvas, 0, 0, width, height);
@@ -1749,7 +1760,7 @@ export const App: React.FC = () => {
             }
           } else {
             ctx.globalAlpha = capOpacity;
-            drawCaptionsToCanvas(ctx, transcript, captionMode, t * 1000, width, height, captionStyle, capScale);
+            drawCaptionsToCanvas(ctx, transcript, captionMode, t * 1000, width, height, captionStyle, capScale, range.start * 1000);
             ctx.globalAlpha = 1;
           }
         }
@@ -1848,23 +1859,51 @@ export const App: React.FC = () => {
 
   const audioMode = !!audioInfo && !videoInfo;
 
-  const handleTimelineRangeChange = (s: number, e: number) => {
-    setActiveExportParams({
-      ...activeExportParams,
+  const handleClipRangeChange = (id: string, s: number, e: number) => {
+    setMicroTimelines(prev => prev.map(mt =>
+      mt.id === id ? { ...mt, startSecond: s, endSecond: e } : mt
+    ));
+  };
+  const handleAddClipStart = () => {
+    setPendingClipStart(playheadSecond);
+  };
+  const handleAddClipEnd = () => {
+    if (pendingClipStart === null) return;
+    const s = Math.min(pendingClipStart, playheadSecond);
+    const e = Math.max(pendingClipStart, playheadSecond);
+    if (e - s < 0.1) return;
+    const newClip: MicroTimeline = {
+      id: crypto.randomUUID(),
+      name: `Clip ${microTimelines.length + 1}`,
       startSecond: s,
       endSecond: e,
-      duration: Math.max(0.01, e - s),
+      color: MICRO_TIMELINE_COLORS[microTimelines.length % MICRO_TIMELINE_COLORS.length],
+    };
+    setMicroTimelines(prev => [...prev, newClip]);
+    setSelectedClipId(newClip.id);
+    setPendingClipStart(null);
+  };
+  const handleDeleteClip = (id: string) => {
+    setMicroTimelines(prev => {
+      const next = prev.filter(mt => mt.id !== id);
+      if (selectedClipId === id) {
+        setSelectedClipId(next[0]?.id ?? null);
+      }
+      return next;
     });
+  };
+  const handleRenameClip = (id: string, name: string) => {
+    setMicroTimelines(prev => prev.map(mt => mt.id === id ? { ...mt, name } : mt));
   };
   const handleTimelineSeek = (sec: number) => {
     if (mediaElRef.current) handleSeekPlayhead(sec);
     else setPlayheadSecond(sec);
   };
   const handleToggleOutro = () => {
-    setActiveExportParams({
-      ...activeExportParams,
-      outroEnabled: !activeExportParams.outroEnabled,
-    });
+    setBaseExportParams(p => ({
+      ...p,
+      outroEnabled: !p.outroEnabled,
+    }));
   };
 
   return (
@@ -1963,6 +2002,7 @@ export const App: React.FC = () => {
               shader={captionShader}
               playhead={playheadSecond}
               opacity={capOpacity}
+              playbackStartMs={playbackStartMs}
             />
           );
           })()}
@@ -2008,13 +2048,20 @@ export const App: React.FC = () => {
       {/* dedicated preview-bottom timeline (range handles + zoom + scroll) */}
       <PreviewTimeline
         duration={mediaDuration}
-        start={timelineRange.start}
-        end={timelineRange.end}
         playhead={playheadSecond}
-        onRangeChange={handleTimelineRangeChange}
         onPlayheadChange={handleTimelineSeek}
         outroEnabled={activeExportParams.outroEnabled}
         onToggleOutro={handleToggleOutro}
+        microTimelines={microTimelines}
+        selectedId={selectedClipId}
+        pendingClipStart={pendingClipStart}
+        onSelectClip={setSelectedClipId}
+        onClipRangeChange={handleClipRangeChange}
+        onAddStart={handleAddClipStart}
+        onAddEnd={handleAddClipEnd}
+        onCancelPending={() => setPendingClipStart(null)}
+        onDeleteClip={handleDeleteClip}
+        onRenameClip={handleRenameClip}
       />
       </div>
 
@@ -2401,6 +2448,7 @@ export const App: React.FC = () => {
               onExport={exportComposition}
               lockedDuration={videoInfo?.duration ?? audioInfo?.duration}
               layerSummary={exportLayerSummary}
+              clipName={selectedClip?.name}
             />
           )}
         </div>

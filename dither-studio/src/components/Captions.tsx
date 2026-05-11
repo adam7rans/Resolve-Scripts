@@ -9,6 +9,21 @@ import {
 } from '../lib/transcript';
 import { DEFAULT_CAPTION_STYLE, type CaptionStyle } from '../lib/types';
 
+// After a caption's last word ends, hold it fully visible for this long…
+const CAPTION_HOLD_MS = 1000;
+// …then fade it out over this duration.
+const CAPTION_FADE_MS = 2000;
+const CAPTION_GRACE_MS = CAPTION_HOLD_MS + CAPTION_FADE_MS;
+
+function captionFadeAlpha(timeMs: number, captionEndMs: number, playbackStartMs: number | undefined): number {
+  if (timeMs <= captionEndMs) return 1;
+  if (playbackStartMs !== undefined && captionEndMs < playbackStartMs) return 0;
+  const elapsed = timeMs - captionEndMs;
+  if (elapsed <= CAPTION_HOLD_MS) return 1;
+  if (elapsed <= CAPTION_GRACE_MS) return 1 - (elapsed - CAPTION_HOLD_MS) / CAPTION_FADE_MS;
+  return 0;
+}
+
 interface CaptionsProps {
   transcript: TranscriptData;
   mode: CaptionMode;
@@ -20,6 +35,8 @@ interface CaptionsProps {
   playhead?: number;
   /** Opacity override (0..1) */
   opacity?: number;
+  /** Media time (ms) at which the current playback run started (for caption fade-out). */
+  playbackStartMs?: number;
 }
 
 const isWordActive = (w: TranscriptWord, ms: number) =>
@@ -41,7 +58,7 @@ const splitWordParts = (text: string): { lead: string; body: string; trail: stri
   return { lead: lead ?? '', body, trail: trail ?? '' };
 };
 
-export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DEFAULT_CAPTION_STYLE, frame, timeSourceRef, playhead, opacity = 1 }) => {
+export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DEFAULT_CAPTION_STYLE, frame, timeSourceRef, playhead, opacity = 1, playbackStartMs }) => {
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const rafRef = useRef<number | null>(null);
   const captionStyle = { ...DEFAULT_CAPTION_STYLE, ...style };
@@ -97,16 +114,31 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
     const previous = [...words].reverse().find((w) => currentTimeMs >= (w.start ?? 0));
     if (!previous) return null;
     const utteranceEnd = activeUtterance.end ?? previous.end ?? previous.start ?? 0;
-    return currentTimeMs <= utteranceEnd + 1000 ? previous : null;
-  }, [activeUtterance, currentTimeMs]);
+    if (currentTimeMs > utteranceEnd + CAPTION_GRACE_MS) return null;
+    if (captionFadeAlpha(currentTimeMs, utteranceEnd, playbackStartMs) <= 0) return null;
+    return previous;
+  }, [activeUtterance, currentTimeMs, playbackStartMs]);
 
   const activeSentence = useMemo(() => {
     if (!sentences.length) return null;
     return sentences.find((s, i) => {
       const next = sentences[i + 1]?.start ?? Number.POSITIVE_INFINITY;
-      return currentTimeMs >= s.start && currentTimeMs < next;
+      const deadline = Math.min(next, s.end + CAPTION_GRACE_MS);
+      return currentTimeMs >= s.start && currentTimeMs < deadline;
     }) ?? null;
   }, [sentences, currentTimeMs]);
+
+  // Fade alpha for captions after speech ends (hold 1s, fade 2s).
+  const sentenceFadeAlpha = useMemo(() => {
+    if (!activeSentence) return 0;
+    return captionFadeAlpha(currentTimeMs, activeSentence.end, playbackStartMs);
+  }, [activeSentence, currentTimeMs, playbackStartMs]);
+
+  const wordFadeAlpha = useMemo(() => {
+    if (!activeUtterance || !activeWord) return 0;
+    const utteranceEnd = activeUtterance.end ?? activeWord.end ?? activeWord.start ?? 0;
+    return captionFadeAlpha(currentTimeMs, utteranceEnd, playbackStartMs);
+  }, [activeUtterance, activeWord, currentTimeMs, playbackStartMs]);
 
   // word-mode fade in/out
   const [wordText, setWordText] = useState('');
@@ -170,7 +202,7 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
             letterSpacing: `${captionStyle.letterSpacing}em`,
             color: captionStyle.color,
             textShadow: '0 2px 16px rgba(0,0,0,0.7)',
-            opacity: captionStyle.wordHighlightEnabled ? (wordVisible ? 1 : 0) : 1,
+            opacity: (captionStyle.wordHighlightEnabled ? (wordVisible ? 1 : 0) : 1) * wordFadeAlpha,
             transition: captionStyle.wordHighlightEnabled ? 'opacity 200ms ease, color 200ms ease' : 'none',
           }}
         >
@@ -181,7 +213,7 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
   }
 
   // line mode
-  if (!activeSentence) return <div style={overlayStyle} />;
+  if (!activeSentence || sentenceFadeAlpha <= 0) return <div style={overlayStyle} />;
 
   const words = activeSentence.words ?? [];
   return (
@@ -195,6 +227,7 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
           lineHeight: captionStyle.lineHeight,
           color: captionStyle.color,
           textShadow: '0 2px 12px rgba(0,0,0,0.7)',
+          opacity: sentenceFadeAlpha,
         }}
       >
         {words.length > 0

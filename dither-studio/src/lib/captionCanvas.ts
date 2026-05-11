@@ -4,6 +4,13 @@ import { DEFAULT_CAPTION_STYLE, type CaptionStyle } from './types';
 const isWordActive = (w: TranscriptWord, ms: number) =>
   ms >= (w.start ?? 0) && ms <= (w.end ?? w.start ?? 0);
 
+// After a caption's last word ends, hold it fully visible for this long…
+const CAPTION_HOLD_MS = 1000;
+// …then fade it out over this duration.
+const CAPTION_FADE_MS = 2000;
+// Total grace window after the last word's end.
+const CAPTION_GRACE_MS = CAPTION_HOLD_MS + CAPTION_FADE_MS;
+
 /**
  * Split a token into [leadingPunct, body, trailingPunct]. Mirrors the same
  * helper in Captions.tsx so the punctuation never receives the active
@@ -61,6 +68,24 @@ function wrapTokens(
   return lines;
 }
 
+/**
+ * Compute the fade alpha for a caption whose last word ended at `captionEndMs`.
+ * Returns 1 while speech is active or during the hold window, ramps to 0 during
+ * the fade window, and returns 0 after the grace period expires.
+ *
+ * `playbackStartMs` prevents "retroactive" display: if playback began after
+ * the caption's speech ended, the caption is invisible (returns 0).
+ */
+function captionFadeAlpha(timeMs: number, captionEndMs: number, playbackStartMs: number | undefined): number {
+  if (timeMs <= captionEndMs) return 1;
+  // Don't show a caption whose speech already ended before playback started.
+  if (playbackStartMs !== undefined && captionEndMs < playbackStartMs) return 0;
+  const elapsed = timeMs - captionEndMs;
+  if (elapsed <= CAPTION_HOLD_MS) return 1;
+  if (elapsed <= CAPTION_GRACE_MS) return 1 - (elapsed - CAPTION_HOLD_MS) / CAPTION_FADE_MS;
+  return 0;
+}
+
 function activeUtteranceAt(data: TranscriptData, timeMs: number) {
   return data.utterances.find((u, i) => {
     const next = data.utterances[i + 1]?.start ?? Number.POSITIVE_INFINITY;
@@ -68,7 +93,7 @@ function activeUtteranceAt(data: TranscriptData, timeMs: number) {
   }) ?? null;
 }
 
-function activeWordAt(data: TranscriptData, timeMs: number) {
+function activeWordAt(data: TranscriptData, timeMs: number, playbackStartMs: number | undefined) {
   const utterance = activeUtteranceAt(data, timeMs);
   if (!utterance?.words) return null;
   const exact = utterance.words.find((w) => isWordActive(w, timeMs));
@@ -76,10 +101,12 @@ function activeWordAt(data: TranscriptData, timeMs: number) {
   const previous = [...utterance.words].reverse().find((w) => timeMs >= (w.start ?? 0));
   if (!previous) return null;
   const utteranceEnd = utterance.end ?? previous.end ?? previous.start ?? 0;
-  return timeMs <= utteranceEnd + 1000 ? previous : null;
+  if (timeMs > utteranceEnd + CAPTION_GRACE_MS) return null;
+  if (captionFadeAlpha(timeMs, utteranceEnd, playbackStartMs) <= 0) return null;
+  return previous;
 }
 
-function activeSentenceAt(data: TranscriptData, timeMs: number, style: CaptionStyle) {
+function activeSentenceAt(data: TranscriptData, timeMs: number, style: CaptionStyle, playbackStartMs: number | undefined) {
   const sentences = splitSentences(data, {
     mode: style.lineSplitMode ?? 'sentence',
     maxWords: style.lineMaxWords,
@@ -89,7 +116,8 @@ function activeSentenceAt(data: TranscriptData, timeMs: number, style: CaptionSt
   });
   return sentences.find((s, i) => {
     const next = sentences[i + 1]?.start ?? Number.POSITIVE_INFINITY;
-    return timeMs >= s.start && timeMs < next;
+    const deadline = Math.min(next, s.end + CAPTION_GRACE_MS);
+    return timeMs >= s.start && timeMs < deadline;
   }) ?? null;
 }
 
@@ -102,6 +130,7 @@ export function drawCaptionsToCanvas(
   height: number,
   inputStyle: CaptionStyle,
   scale = 1.0, // Scale factor: exportWidth / previewWidth
+  playbackStartMs?: number,
 ) {
   const style = { ...DEFAULT_CAPTION_STYLE, ...inputStyle };
   const wordBoxWidth = width * 0.92;
@@ -116,8 +145,16 @@ export function drawCaptionsToCanvas(
   ctx.textAlign = 'left';
 
   if (mode === 'word') {
-    const word = activeWordAt(transcript, timeMs)?.text ?? '';
+    const wordObj = activeWordAt(transcript, timeMs, playbackStartMs);
+    const word = wordObj?.text ?? '';
     if (!word) {
+      ctx.restore();
+      return;
+    }
+    const utterance = activeUtteranceAt(transcript, timeMs);
+    const utteranceEnd = utterance?.end ?? wordObj?.end ?? wordObj?.start ?? 0;
+    const wordAlpha = captionFadeAlpha(timeMs, utteranceEnd, playbackStartMs);
+    if (wordAlpha <= 0) {
       ctx.restore();
       return;
     }
@@ -128,14 +165,20 @@ export function drawCaptionsToCanvas(
     const wordBoxLeft = ((width - wordBoxWidth) * style.horizontalPosition) / 100;
     const x = lineStartX(wordBoxLeft, wordBoxWidth, wordWidth, style.textAlign);
     ctx.fillStyle = style.color;
-    ctx.globalAlpha = style.wordHighlightEnabled ? 1 : 1;
+    ctx.globalAlpha = wordAlpha;
     ctx.fillText(word, x, centerY + wordFontSize / 3);
     ctx.restore();
     return;
   }
 
-  const sentence = activeSentenceAt(transcript, timeMs, style);
+  const sentence = activeSentenceAt(transcript, timeMs, style, playbackStartMs);
   if (!sentence) {
+    ctx.restore();
+    return;
+  }
+
+  const sentenceAlpha = captionFadeAlpha(timeMs, sentence.end, playbackStartMs);
+  if (sentenceAlpha <= 0) {
     ctx.restore();
     return;
   }
@@ -143,6 +186,7 @@ export function drawCaptionsToCanvas(
   applyCaptionFont(ctx, lineFontSize, style);
   ctx.shadowBlur = 12 * scale;
   ctx.shadowOffsetY = 2 * scale;
+  ctx.globalAlpha = sentenceAlpha;
   const boxWidth = lineBoxWidth;
   const boxLeft = ((width - lineBoxWidth) * style.horizontalPosition) / 100;
   // Underline fade window (ms). 0 → instant on/off, matches the React preview.
@@ -234,7 +278,7 @@ export function drawCaptionsToCanvas(
         if (barWidth > 0 && alpha > 0) {
           ctx.save();
           ctx.shadowColor = 'transparent';
-          ctx.globalAlpha = alpha;
+          ctx.globalAlpha = alpha * sentenceAlpha;
           ctx.fillStyle = style.color;
           ctx.fillRect(bodyX, y + (5 * scale), barWidth, 2 * scale);
           ctx.restore();

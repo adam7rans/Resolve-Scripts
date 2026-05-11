@@ -30,10 +30,12 @@ interface ShaderCaptionsProps {
   playhead?: number;
   /** Opacity override (0..1) */
   opacity?: number;
+  /** Media time (ms) at which the current playback run started (for caption fade-out). */
+  playbackStartMs?: number;
 }
 
 export const ShaderCaptions: React.FC<ShaderCaptionsProps> = ({
-  transcript, mode, style, frame, timeSourceRef, shader, playhead, opacity = 1,
+  transcript, mode, style, frame, timeSourceRef, shader, playhead, opacity = 1, playbackStartMs,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenRef = useRef<HTMLCanvasElement | null>(null);
@@ -46,6 +48,7 @@ export const ShaderCaptions: React.FC<ShaderCaptionsProps> = ({
   const transcriptRef = useRef(transcript);
   const frameRef = useRef(frame);
   const playheadRef = useRef(playhead);
+  const playbackStartMsRef = useRef(playbackStartMs);
 
   useEffect(() => { shaderRef.current = shader; }, [shader]);
   useEffect(() => { styleRef.current = style; }, [style]);
@@ -53,6 +56,7 @@ export const ShaderCaptions: React.FC<ShaderCaptionsProps> = ({
   useEffect(() => { transcriptRef.current = transcript; }, [transcript]);
   useEffect(() => { frameRef.current = frame; }, [frame]);
   useEffect(() => { playheadRef.current = playhead; }, [playhead]);
+  useEffect(() => { playbackStartMsRef.current = playbackStartMs; }, [playbackStartMs]);
 
   // Initialize the WebGL renderer + offscreen 2D canvas once, when shader
   // becomes enabled. Tearing this down/up on every parameter change would
@@ -109,7 +113,7 @@ export const ShaderCaptions: React.FC<ShaderCaptionsProps> = ({
         }
         const effectiveStyle = styleRef.current ?? DEFAULT_CAPTION_STYLE;
         drawCaptionsToCanvas(
-          ctx, transcriptRef.current, modeRef.current, timeMs, f.w, f.h, effectiveStyle,
+          ctx, transcriptRef.current, modeRef.current, timeMs, f.w, f.h, effectiveStyle, 1.0, playbackStartMsRef.current,
         );
         renderer.render(offscreen, params);
       } catch (err) {
@@ -145,6 +149,7 @@ export const ShaderCaptions: React.FC<ShaderCaptionsProps> = ({
         timeSourceRef={timeSourceRef}
         playhead={playhead}
         opacity={opacity}
+        playbackStartMs={playbackStartMs}
       />
     );
   }

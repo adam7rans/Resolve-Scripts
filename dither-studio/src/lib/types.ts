@@ -248,6 +248,19 @@ export const DEFAULT_VIDEO_DITHER: Partial<VideoShaderParams> = {
   darkModeColor: DEFAULT_VIDEO.darkModeColor,
 };
 
+export interface MicroTimeline {
+  id: string;
+  name: string;
+  startSecond: number;
+  endSecond: number;
+  color: string;
+}
+
+export const MICRO_TIMELINE_COLORS = [
+  '#1f6feb', '#30d158', '#eb6f1f', '#ff453a',
+  '#bf5af2', '#ffd60a', '#64d2ff',
+];
+
 export const DEFAULT_EXPORT: ExportParams = {
   width: 1920,
   height: 1080,
