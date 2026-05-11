@@ -691,6 +691,7 @@ export const App: React.FC = () => {
   const audioReactivityRef = useRef(audioReactivity);
   const musicRef = useRef(music);
   const playingRef = useRef(playing);
+  const playingInClipRef = useRef(false);
   const playheadRef = useRef(playheadSecond);
   const activeExportParamsRef = useRef(activeExportParams);
   const timelineDurationRef = useRef(timelineDuration);
@@ -889,8 +890,9 @@ export const App: React.FC = () => {
       const clip = selectedClipRef.current;
       const params = activeExportParamsRef.current;
       const outroDuration = params.outroEnabled ? 5 : 0;
-      const clipEnd = clip ? clip.endSecond : totalDuration;
-      const limit = clipEnd + (clip ? outroDuration : 0);
+      const insideClip = clip && playingInClipRef.current;
+      const clipEnd = insideClip ? clip.endSecond : totalDuration;
+      const limit = clipEnd + (insideClip ? outroDuration : 0);
       const vTime = v.currentTime || 0;
 
       const now = performance.now();
@@ -914,7 +916,7 @@ export const App: React.FC = () => {
 
       if (playingRef.current) {
         let nextP: number;
-        if (clip && outroDuration > 0 && playheadRef.current >= clipEnd - 0.01) {
+        if (insideClip && outroDuration > 0 && playheadRef.current >= clipEnd - 0.01) {
           nextP = playheadRef.current + dt;
         } else {
           nextP = vTime;
@@ -1499,9 +1501,12 @@ export const App: React.FC = () => {
       let target = cur;
       const clip = selectedClip;
       if (clip) {
-        const clipEnd = clip.endSecond + (activeExportParams.outroEnabled ? 5 : 0);
-        if (cur >= clip.endSecond - 0.001 || cur < clip.startSecond) target = clip.startSecond;
+        // Only loop back when we're at/past the clip end; if the playhead is
+        // elsewhere (before or after the clip) just play from where we are.
+        if (cur >= clip.endSecond - 0.001) target = clip.startSecond;
+        playingInClipRef.current = target >= clip.startSecond && target < clip.endSecond;
       } else {
+        playingInClipRef.current = false;
         if (cur >= totalDuration - 0.001) target = 0;
       }
       setPlayheadSecond(target);

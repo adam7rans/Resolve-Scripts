@@ -374,15 +374,19 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
         }} />
       </div>
 
-      {/* clip list */}
+      {/* clip list — clicking empty space deselects */}
       {microTimelines.length > 0 && (
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>
+        <div
+          style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2, minHeight: 28 }}
+          onClick={() => onSelectClip(null)}
+          title="Click empty space to deselect clip"
+        >
           {microTimelines.map((mt) => {
             const isSel = mt.id === selectedId;
             return (
               <button
                 key={mt.id}
-                onClick={() => { if (isSel) onPlayheadChange(mt.startSecond); else onSelectClip(mt.id); }}
+                onClick={(e) => { e.stopPropagation(); if (isSel) onPlayheadChange(mt.startSecond); else onSelectClip(mt.id); }}
                 onDoubleClick={() => setEditingName(mt.id)}
                 style={{
                   ...btn,
