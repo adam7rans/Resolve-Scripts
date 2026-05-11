@@ -176,7 +176,9 @@ const PillToggle: React.FC<{ label: string; on: boolean; onClick: () => void; ac
 );
 
 const ProjectStatusPanel: React.FC<{ project: ProjectMeta | undefined; status: ProjectTaskStatus }> = ({ project, status }) => {
-  const color = status.kind === 'success' ? '#22c55e' : status.kind === 'error' ? '#ef4444' : status.kind === 'progress' ? '#4a90d9' : '#666';
+  // Only show the panel for actionable states — hide once a load/save succeeds
+  if (status.kind === 'success') return null;
+  const color = status.kind === 'error' ? '#ef4444' : status.kind === 'progress' ? '#4a90d9' : '#666';
   return (
     <div style={{ padding: '8px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -188,9 +190,9 @@ const ProjectStatusPanel: React.FC<{ project: ProjectMeta | undefined; status: P
           <span style={{ color: '#666', fontSize: 11, marginLeft: 'auto', flexShrink: 0 }}>{status.progress}%</span>
         )}
       </div>
-      {project && (
+      {project && status.detail && (
         <div style={{ color: '#555', fontSize: 10, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {status.detail ?? `Folder: projects/${project.id}`}
+          {status.detail}
         </div>
       )}
     </div>
@@ -2275,9 +2277,9 @@ export const App: React.FC = () => {
           onCreate={handleCreateProject}
         />
         <ProjectStatusPanel project={activeProject} status={projectStatus} />
-        {/* media transport (when a video or audio file is loaded) */}
+        {/* media transport row 1: play / mute / file info */}
         {(videoInfo || audioInfo) && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a' }}>
             <button
               onClick={togglePlay}
               style={{ background: '#1f6feb', color: '#fff', border: 'none', padding: '4px 12px', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit' }}
@@ -2291,6 +2293,22 @@ export const App: React.FC = () => {
             >
               {muted ? '🔇' : '🔊'}
             </button>
+            <span style={{ color: '#aaa', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {videoInfo?.name ?? audioInfo?.name}
+            </span>
+            <span style={{ color: '#666', fontSize: 11, marginLeft: 'auto', flexShrink: 0 }}>
+              {videoInfo
+                ? `${videoInfo.w}×${videoInfo.h} · ${videoInfo.duration.toFixed(1)}s`
+                : audioInfo
+                  ? `audio · ${audioInfo.duration.toFixed(1)}s`
+                  : ''}
+            </span>
+          </div>
+        )}
+
+        {/* media transport row 2: skip silence controls */}
+        {(videoInfo || audioInfo) && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a' }}>
             <button
               onClick={() => setJumpCutsEnabled((v) => !v)}
               disabled={!transcript}
@@ -2310,6 +2328,7 @@ export const App: React.FC = () => {
                 cursor: !transcript ? 'not-allowed' : 'pointer',
                 fontFamily: 'inherit',
                 opacity: !transcript ? 0.5 : 1,
+                flexShrink: 0,
               }}
             >
               ✂ Skip silence
@@ -2337,8 +2356,8 @@ export const App: React.FC = () => {
               }}
             />
             <span style={{ color: '#666', fontSize: 11 }}>ms</span>
-            <span style={{ color: '#555', fontSize: 11, marginLeft: 4 }}>|</span>
-            <span style={{ color: !transcript || !jumpCutsEnabled ? '#555' : '#888', fontSize: 11, whiteSpace: 'nowrap' }}>tighten</span>
+            <span style={{ color: '#333', fontSize: 11 }}>|</span>
+            <span style={{ color: !transcript || !jumpCutsEnabled ? '#444' : '#777', fontSize: 11, whiteSpace: 'nowrap' }}>tighten</span>
             <input
               type="range"
               min={0}
@@ -2348,20 +2367,10 @@ export const App: React.FC = () => {
               onChange={(e) => setJumpCutPaddingMs(Number(e.target.value))}
               disabled={!transcript || !jumpCutsEnabled}
               title={`Shrink each skip zone by ${jumpCutPaddingMs}ms on each side`}
-              style={{ width: 80, accentColor: '#1f6feb', opacity: !transcript || !jumpCutsEnabled ? 0.3 : 1 }}
+              style={{ flex: 1, accentColor: '#1f6feb', opacity: !transcript || !jumpCutsEnabled ? 0.25 : 1 }}
             />
-            <span style={{ color: !transcript || !jumpCutsEnabled ? '#555' : '#aaa', fontSize: 11, minWidth: 36 }}>
+            <span style={{ color: !transcript || !jumpCutsEnabled ? '#444' : '#aaa', fontSize: 11, minWidth: 40, textAlign: 'right' }}>
               ±{jumpCutPaddingMs}ms
-            </span>
-            <span style={{ color: '#aaa', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {videoInfo?.name ?? audioInfo?.name}
-            </span>
-            <span style={{ color: '#666', fontSize: 11, marginLeft: 'auto', flexShrink: 0 }}>
-              {videoInfo
-                ? `${videoInfo.w}×${videoInfo.h} · ${videoInfo.duration.toFixed(1)}s`
-                : audioInfo
-                  ? `audio · ${audioInfo.duration.toFixed(1)}s`
-                  : ''}
             </span>
           </div>
         )}
