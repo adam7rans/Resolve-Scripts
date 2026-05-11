@@ -1780,8 +1780,55 @@ export const App: React.FC = () => {
     const activeGuideObj = cropToGuide ? GUIDES.find((g) => g.key === activeGuide) : null;
     const width = activeGuideObj ? activeGuideObj.w : Math.max(1, Math.floor(params.width));
     const height = activeGuideObj ? activeGuideObj.h : Math.max(1, Math.floor(params.height));
-    const duration = range.duration;
+
+    // Compute "kept segments" for jump-cut silence skipping during export.
+    // Each segment maps a slice of source time → output time.
+    type KeptSegment = { srcStart: number; srcEnd: number; outStart: number };
+    const activeGapsForExport = jumpCutsEnabled
+      ? jumpCutGapListRef.current
+          .map(g => ({ start: g.startMs / 1000, end: g.endMs / 1000 }))
+          .filter(g => g.end > range.start && g.start < range.end)
+          .map(g => ({ start: Math.max(g.start, range.start), end: Math.min(g.end, range.end) }))
+          .sort((a, b) => a.start - b.start)
+      : [];
+    const kept: KeptSegment[] = [];
+    {
+      let cursor = range.start;
+      let outCursor = 0;
+      for (const gap of activeGapsForExport) {
+        if (gap.start > cursor) {
+          kept.push({ srcStart: cursor, srcEnd: gap.start, outStart: outCursor });
+          outCursor += gap.start - cursor;
+        }
+        cursor = Math.max(cursor, gap.end);
+      }
+      if (cursor < range.end) {
+        kept.push({ srcStart: cursor, srcEnd: range.end, outStart: outCursor });
+      }
+      // If somehow no gaps and no segment was added (shouldn't happen unless range empty),
+      // fall back to a single full-range segment.
+      if (kept.length === 0) {
+        kept.push({ srcStart: range.start, srcEnd: range.end, outStart: 0 });
+      }
+    }
+    const lastKept = kept[kept.length - 1];
+    const contentDuration = lastKept.outStart + (lastKept.srcEnd - lastKept.srcStart);
+    const duration = contentDuration + range.outroDuration;
     const total = Math.max(1, Math.ceil(duration * params.fps));
+    /** Map output time → source time (and whether we're in the outro tail). */
+    const outToSrc = (tOut: number): { src: number; inOutro: boolean } => {
+      if (tOut >= contentDuration) {
+        return { src: range.end + (tOut - contentDuration), inOutro: range.outroDuration > 0 };
+      }
+      // linear scan; fine for typical gap counts. Could be binary search if huge.
+      for (const seg of kept) {
+        const segDur = seg.srcEnd - seg.srcStart;
+        if (tOut <= seg.outStart + segDur + 1e-9) {
+          return { src: seg.srcStart + (tOut - seg.outStart), inOutro: false };
+        }
+      }
+      return { src: range.end, inOutro: false };
+    };
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -1811,9 +1858,12 @@ export const App: React.FC = () => {
         fps: params.fps,
         totalFrames: total,
         startTime: range.start,
-        duration: range.duration,
-        baseDuration: range.baseDuration,
+        duration,
+        baseDuration: contentDuration,
         outroDuration: range.outroDuration,
+        keptSegments: activeGapsForExport.length > 0
+          ? kept.map(({ srcStart, srcEnd }) => ({ srcStart, srcEnd }))
+          : undefined,
         layers: {
           background: bgLayerOn,
           video: videoLayerOn,
@@ -1825,12 +1875,14 @@ export const App: React.FC = () => {
 
       for (let i = 0; i < total; i++) {
         throwIfAborted();
-        const t = range.start + i / params.fps;
+        const tOut = i / params.fps;
+        const { src: tSrc, inOutro } = outToSrc(tOut);
         ctx.clearRect(0, 0, width, height);
 
         // Deterministic bands for this frame (zeros if no audio loaded).
+        // Use source time so audio reactivity matches the actual audio at this moment.
         const bands = audio && audioReactivity.enabled
-          ? audio.getDeterministicBands(t)
+          ? audio.getDeterministicBands(tSrc)
           : { rms: 0, low: 0, mid: 0, high: 0 };
         const g = audioReactivity.gain;
 
@@ -1839,12 +1891,14 @@ export const App: React.FC = () => {
             speed: bands.rms * g * audioReactivity.modSpeed * 1.5,
             brightness: bands.rms * g * audioReactivity.modBrightness,
           } : { speed: 0, brightness: 0 });
-          bgRenderer.renderFrame(t);
+          // Background animation should advance smoothly; use output time so it
+          // doesn't visibly jump across cut boundaries.
+          bgRenderer.renderFrame(tOut);
           ctx.drawImage(bgRenderer.renderer.domElement as HTMLCanvasElement, 0, 0, width, height);
         }
 
         if (videoLayerOn && videoRenderer && video) {
-          const tVideo = range.outroDuration > 0 && t > range.end ? range.end : t;
+          const tVideo = inOutro ? range.end : tSrc;
           if (tVideo <= video.duration) {
             await seekVideoTo(video, tVideo);
             throwIfAborted();
@@ -1865,8 +1919,8 @@ export const App: React.FC = () => {
 
           // Caption fade-out during outro: faded out by 3s of the 5s outro.
           let capOpacity = 1;
-          if (range.outroDuration > 0 && t > range.end) {
-            const outroElapsed = t - range.end;
+          if (inOutro) {
+            const outroElapsed = tOut - contentDuration;
             capOpacity = Math.max(0, 1 - outroElapsed / 3);
           }
           
@@ -1874,22 +1928,22 @@ export const App: React.FC = () => {
             const capCtx = capOffscreen.getContext('2d');
             if (capCtx) {
                capCtx.clearRect(0, 0, width, height);
-               drawCaptionsToCanvas(capCtx, transcript, captionMode, t * 1000, width, height, captionStyle, capScale, range.start * 1000);
-               capRenderer.render(capOffscreen, captionShader, t);
+               drawCaptionsToCanvas(capCtx, transcript, captionMode, tSrc * 1000, width, height, captionStyle, capScale, range.start * 1000);
+               capRenderer.render(capOffscreen, captionShader, tOut);
                ctx.globalAlpha = capOpacity;
                ctx.drawImage(capRenderer.canvas, 0, 0, width, height);
                ctx.globalAlpha = 1;
             }
           } else {
             ctx.globalAlpha = capOpacity;
-            drawCaptionsToCanvas(ctx, transcript, captionMode, t * 1000, width, height, captionStyle, capScale, range.start * 1000);
+            drawCaptionsToCanvas(ctx, transcript, captionMode, tSrc * 1000, width, height, captionStyle, capScale, range.start * 1000);
             ctx.globalAlpha = 1;
           }
         }
 
         // Draw outro transition overlay (white circle)
-        if (range.outroDuration > 0 && t > range.end) {
-          const outroElapsed = t - range.end;
+        if (inOutro) {
+          const outroElapsed = tOut - contentDuration;
           const progress = Math.min(1, outroElapsed / range.outroDuration);
           
           // To cover the rectangle, the radius needs to reach the distance from center to corner

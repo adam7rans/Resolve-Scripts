@@ -91,6 +91,15 @@ export async function createProjectExport(
     totalFrames: number;
     startTime?: number;
     duration?: number;
+    baseDuration?: number;
+    outroDuration?: number;
+    /**
+     * Source-relative time segments to keep (in seconds). Used by the server
+     * to edit/concat the audio when the user has enabled jump-cut silence
+     * skipping. When absent or empty, the audio is taken in one piece via
+     * `-ss startTime -t duration`.
+     */
+    keptSegments?: Array<{ srcStart: number; srcEnd: number }>;
     layers: Record<string, boolean>;
   },
 ): Promise<{ ok: boolean; exportId: string; folder: string }> {

@@ -78,6 +78,12 @@ async function stitchVideo(projectId: string, exportId: string) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
   const prefix = (manifest.prefix || '').trim();
   const { fps, startTime, duration } = manifest;
+  // `keptSegments`, when present, lists the source-relative time windows that
+  // should be concatenated together for the audio (used by the jump-cut /
+  // skip-silence feature). When absent, audio is taken as one slice via -ss/-t.
+  const keptSegments: Array<{ srcStart: number; srcEnd: number }> =
+    Array.isArray(manifest.keptSegments) ? manifest.keptSegments : [];
+  const hasKeptSegments = keptSegments.length > 0;
 
   // When the background layer was OFF for the export, the PNG sequence has
   // an alpha channel. libx264/yuv420p (the .mp4 path) cannot preserve alpha
@@ -135,10 +141,17 @@ async function stitchVideo(projectId: string, exportId: string) {
     audioSources.forEach((src, i) => {
       const isMusic = i > 0 && !src.isOutro;
       const isOutro = src.isOutro;
+      const isMain = i === 0 && !src.isOutro;
       const loopStr = isMusic ? '-stream_loop -1 ' : '';
-      // Music starts at 0:00 relative to the start handle (which is 0:00 in the output video)
-      const ssStr = (isOutro || isMusic) ? '' : `-ss ${startTime || 0} `;
-      inputs += ` ${loopStr}${ssStr}-t ${duration || 0} -i "${src.path}"`;
+      // Music starts at 0:00 relative to the start handle (which is 0:00 in the output video).
+      // Main audio: when we have keptSegments, we need the original source timeline so atrim
+      // can address absolute timestamps — so skip -ss/-t entirely. Otherwise use -ss/-t to
+      // grab the trimmed slice directly.
+      const ssStr = (isOutro || isMusic) ? ''
+                  : (isMain && hasKeptSegments) ? ''
+                  : `-ss ${startTime || 0} `;
+      const tStr = (isMain && hasKeptSegments) ? '' : `-t ${duration || 0} `;
+      inputs += ` ${loopStr}${ssStr}${tStr}-i "${src.path}"`;
     });
 
     // We use a more flexible mixing approach to handle 1-3 sources.
@@ -163,9 +176,25 @@ async function stitchVideo(projectId: string, exportId: string) {
     audioSources.forEach((src, i) => {
       const idx = i + 1;
       if (i === 0) {
-        // Main audio: volume -> limiter -> pad to full duration -> split
+        // Main audio: optionally atrim+concat (skip-silence) -> volume -> limiter -> pad -> split
         const totalMs = Math.round(duration * 1000);
-        filter += `[${idx}:a]volume=${(src.volume * limIn).toFixed(2)}`;
+        let mainLabel = `[${idx}:a]`;
+        if (hasKeptSegments) {
+          // Split the source N ways, atrim each window, then concat them in order.
+          const n = keptSegments.length;
+          const splitOuts: string[] = [];
+          for (let j = 0; j < n; j++) splitOuts.push(`[m_src_${j}]`);
+          filter += `${mainLabel}asplit=${n}${splitOuts.join('')};`;
+          const concatIns: string[] = [];
+          for (let j = 0; j < n; j++) {
+            const seg = keptSegments[j];
+            filter += `[m_src_${j}]atrim=start=${seg.srcStart.toFixed(3)}:end=${seg.srcEnd.toFixed(3)},asetpts=PTS-STARTPTS[m_seg_${j}];`;
+            concatIns.push(`[m_seg_${j}]`);
+          }
+          filter += `${concatIns.join('')}concat=n=${n}:v=0:a=1[main_edited];`;
+          mainLabel = `[main_edited]`;
+        }
+        filter += `${mainLabel}volume=${(src.volume * limIn).toFixed(2)}`;
         if (limEnabled) {
           filter += `,alimiter=level_in=1:level_out=1:limit=${limThresh.toFixed(3)}:attack=5:release=${(limRelease * 1000).toFixed(0)}`;
         }
