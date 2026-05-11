@@ -119,7 +119,7 @@ export async function uploadExportFrame(
   if (!res.ok) throw new Error(`Failed to save ${filename}`);
 }
 
-export async function finishProjectExport(id: string, exportId: string): Promise<{ ok: boolean; folder: string; videoFile?: string }> {
+export async function finishProjectExport(id: string, exportId: string): Promise<{ ok: boolean; folder: string; videoFile?: string; error?: string }> {
   const res = await fetch(`${BASE}/projects/${id}/exports/${exportId}/finish`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to finish project export');
   return res.json();

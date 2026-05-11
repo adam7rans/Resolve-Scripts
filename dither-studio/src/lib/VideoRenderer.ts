@@ -118,7 +118,7 @@ export class VideoRenderer {
   }
 
   /** Render the current video frame. */
-  renderFrame(timeSeconds?: number) {
+  renderFrame(timeSeconds?: number, videoTime?: number) {
     // Always keep the renderer transparent so the shader's alpha output
     // (uAlphaThreshold + dither masking) is preserved both in the preview
     // and in the exported PNGs.
@@ -145,6 +145,10 @@ export class VideoRenderer {
       uvScale.set(1.0, videoAspect / outputAspect);
     }
 
+    if (videoTime !== undefined && Math.abs(this.video.currentTime - videoTime) > 0.001) {
+      this.video.currentTime = videoTime;
+    }
+    
     this.videoTexture.needsUpdate = true;
     this.material.uniforms.uTime.value = timeSeconds !== undefined ? timeSeconds : (performance.now() - this.startTime) / 1000;
     this.renderer.render(this.scene, this.camera);

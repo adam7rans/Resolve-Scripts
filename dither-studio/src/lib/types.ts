@@ -87,6 +87,7 @@ export interface ExportParams {
   filenamePrefix: string;
   startSecond: number;     // start time offset (seconds)
   endSecond?: number;      // end time (seconds) — when absent, uses startSecond + duration
+  outroEnabled?: boolean;  // 5s frozen-frame outro
 }
 
 export interface CaptionStyle {
@@ -213,6 +214,7 @@ export const DEFAULT_EXPORT: ExportParams = {
   filenamePrefix: 'dither',
   startSecond: 0,
   endSecond: 10,
+  outroEnabled: false,
 };
 
 export const DEFAULT_AUDIO_REACTIVITY: AudioReactivityParams = {

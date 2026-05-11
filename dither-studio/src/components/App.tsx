@@ -28,6 +28,7 @@ import { CaptionsEditor } from './CaptionsEditor';
 import { parseTranscript, type CaptionMode, type TranscriptData } from '../lib/transcript';
 import { ProjectBar } from './ProjectBar';
 import { StatusToast, type Toast } from './StatusToast';
+import { OutroOverlay } from './OutroOverlay';
 import {
   listProjects, createProject, getProject, saveSettings,
   uploadVideo, uploadAudio, uploadCaption, uploadMusic, deleteMusic,
@@ -93,7 +94,9 @@ function resolveExportRange(params: ExportParams, totalDuration: number | null) 
   const start = clamp(params.startSecond ?? 0, 0, Math.max(0, total - minGap));
   const fallbackEnd = params.endSecond ?? Math.min(total, start + Math.max(minGap, params.duration || minGap));
   const end = clamp(fallbackEnd, start + minGap, total);
-  return { start, end, total, duration: end - start };
+  const baseDuration = end - start;
+  const outroDuration = params.outroEnabled ? 5 : 0;
+  return { start, end, total, duration: baseDuration + outroDuration, baseDuration, outroDuration };
 }
 
 function guideRectInVideoFrame(
@@ -415,7 +418,9 @@ const MusicControls: React.FC<{
   onLimiterChange: (v: LimiterParams) => void;
   /** Live limiter gain reduction (dB, ≤ 0) for the meter. */
   limiterReductionRef: React.MutableRefObject<number>;
-}> = ({ value, onChange, hasMusic, musicName, onPickFile, onClear, duckGainRef, speechRmsRef, videoVolume, onVideoVolumeChange, videoMuted, onVideoMutedChange, limiter, onLimiterChange, limiterReductionRef }) => {
+  outroVolume: number;
+  onOutroVolumeChange: (v: number) => void;
+}> = ({ value, onChange, hasMusic, musicName, onPickFile, onClear, duckGainRef, speechRmsRef, videoVolume, onVideoVolumeChange, videoMuted, onVideoMutedChange, limiter, onLimiterChange, limiterReductionRef, outroVolume, onOutroVolumeChange }) => {
   const set = (patch: Partial<MusicParams>) => onChange({ ...value, ...patch });
   const setSc = (patch: Partial<MusicParams['sidechain']>) =>
     onChange({ ...value, sidechain: { ...value.sidechain, ...patch } });
@@ -490,6 +495,8 @@ const MusicControls: React.FC<{
           onVolumeChange={(volume) => set({ volume })}
           onMutedChange={(muted) => set({ muted })}
         />
+        <div style={{ color: '#888', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, marginTop: 6 }}>Outro</div>
+        <Slider label="volume" value={outroVolume} min={0} max={1} step={0.05} onChange={onOutroVolumeChange} />
       </Section>
 
       <TabBar<FxSubTab>
@@ -583,6 +590,17 @@ export const App: React.FC = () => {
   const [videoSubTab, setVideoSubTab] = useState<VideoSubTab>('levels');
   const [audioSubTab, setAudioSubTab] = useState<AudioSubTab>('music');
   const [captionsSubTab, setCaptionsSubTab] = useState<CaptionsSubTab>('captions');
+  const [outroVolume, setOutroVolume] = useState(0.5);
+  const [outroAudio] = useState(() => {
+    const a = new Audio('audio/bassnoise.wav');
+    a.loop = false;
+    return a;
+  });
+  const outroAudioRef = useRef<HTMLAudioElement>(outroAudio);
+
+  useEffect(() => {
+    outroAudio.volume = outroVolume;
+  }, [outroVolume, outroAudio]);
 
   // visible layers — both can be on at once (video composites over background
   // wherever the video shader's alpha < 1)
@@ -636,6 +654,37 @@ export const App: React.FC = () => {
   const activeProjectIdRef = useRef<string | null>(null);
   useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
 
+  // Derived state
+  const activeExportParams = videoInfo ? vidExport : bgExport;
+  const setActiveExportParams = videoInfo ? setVidExport : setBgExport;
+  const mediaDuration = videoInfo?.duration ?? audioInfo?.duration ?? activeExportParams.duration ?? 10;
+  const timelineDuration = mediaDuration + (activeExportParams.outroEnabled ? 5 : 0);
+  const timelineRange = resolveExportRange(activeExportParams, mediaDuration);
+  const verticalVideo = isVerticalVideo(videoInfo);
+  const availableGuides = verticalVideo ? GUIDES.filter((g) => g.key !== '1920x1080') : GUIDES;
+  const previewFrame = videoInfo
+    ? fitRect(previewSize.w, previewSize.h, videoInfo.w, videoInfo.h)
+    : { x: 0, y: 0, w: previewSize.w, h: previewSize.h };
+
+  // mirror state into refs the raf loop reads
+  const bgLayerOnRef = useRef(bgLayerOn);
+  const videoLayerOnRef = useRef(videoLayerOn);
+  const audioReactivityRef = useRef(audioReactivity);
+  const musicRef = useRef(music);
+  const playingRef = useRef(playing);
+  const playheadRef = useRef(playheadSecond);
+  const activeExportParamsRef = useRef(activeExportParams);
+  const timelineDurationRef = useRef(timelineDuration);
+
+  useEffect(() => { bgLayerOnRef.current = bgLayerOn; }, [bgLayerOn]);
+  useEffect(() => { videoLayerOnRef.current = videoLayerOn; }, [videoLayerOn]);
+  useEffect(() => { audioReactivityRef.current = audioReactivity; }, [audioReactivity]);
+  useEffect(() => { musicRef.current = music; }, [music]);
+  useEffect(() => { playingRef.current = playing; }, [playing]);
+  useEffect(() => { playheadRef.current = playheadSecond; }, [playheadSecond]);
+  useEffect(() => { activeExportParamsRef.current = activeExportParams; }, [activeExportParams]);
+  useEffect(() => { timelineDurationRef.current = timelineDuration; }, [timelineDuration]);
+
   // ---------- toasts ----------
   const toastCounter = useRef(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -671,11 +720,6 @@ export const App: React.FC = () => {
   const exportingRef = useRef(false);
   const lastBandsRef = useRef<AudioBands>({ rms: 0, low: 0, mid: 0, high: 0 });
   const speechRmsRef = useRef<number>(0);
-  const previewFrame = videoInfo
-    ? fitRect(previewSize.w, previewSize.h, videoInfo.w, videoInfo.h)
-    : { x: 0, y: 0, w: previewSize.w, h: previewSize.h };
-  const verticalVideo = isVerticalVideo(videoInfo);
-  const availableGuides = verticalVideo ? GUIDES.filter((g) => g.key !== '1920x1080') : GUIDES;
 
   // ---------- init renderers once ----------
   useEffect(() => {
@@ -731,8 +775,10 @@ export const App: React.FC = () => {
           }
           bgRendererRef.current.renderFrame(t);
         }
-        if (videoLayerOnRef.current) {
-          videoRendererRef.current?.renderFrame();
+        if (videoLayerOnRef.current && videoRendererRef.current) {
+          const { end, outroDuration } = resolveExportRange(activeExportParamsRef.current, timelineDurationRef.current);
+          const tVideo = (outroDuration > 0 && playheadRef.current > end) ? end : undefined;
+          videoRendererRef.current.renderFrame(t, tVideo);
         }
 
         // Sidechain: read latest voice intensity and apply to the music
@@ -767,17 +813,6 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // mirror state into refs the raf loop reads
-  const bgLayerOnRef = useRef(bgLayerOn);
-  const videoLayerOnRef = useRef(videoLayerOn);
-  const audioReactivityRef = useRef(audioReactivity);
-  const musicRef = useRef(music);
-  useEffect(() => { bgLayerOnRef.current = bgLayerOn; }, [bgLayerOn]);
-  useEffect(() => { videoLayerOnRef.current = videoLayerOn; }, [videoLayerOn]);
-  useEffect(() => { audioReactivityRef.current = audioReactivity; }, [audioReactivity]);
-  useEffect(() => { musicRef.current = music; }, [music]);
-  const playheadRef = useRef(playheadSecond);
-  useEffect(() => { playheadRef.current = playheadSecond; }, [playheadSecond]);
 
   // Push music volume/mute into the player whenever they change. Sidechain
   // params are picked up live each frame from musicRef.
@@ -809,6 +844,7 @@ export const App: React.FC = () => {
     audioSourceRef.current?.setLimiter(limiter);
   }, [limiter, videoInfo, audioInfo]);
   useEffect(() => {
+    if (exportingRef.current) return;
     const w = Math.max(1, Math.floor(previewFrame.w));
     const h = Math.max(1, Math.floor(previewFrame.h));
     bgRendererRef.current?.setSize(w, h);
@@ -824,29 +860,82 @@ export const App: React.FC = () => {
     const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? null;
     const params = videoInfo ? vidExport : bgExport;
     if (!v || !totalDuration) return;
-    const { start, end } = resolveExportRange(params, totalDuration);
-    const clamped = clamp(v.currentTime || 0, start, end);
-    if (Math.abs((v.currentTime || 0) - clamped) > 0.001) {
-      v.currentTime = clamped;
+    const { start, end, outroDuration } = resolveExportRange(params, totalDuration);
+    const limit = end + outroDuration;
+    const current = v.currentTime || 0;
+    
+    // Clamp media element time to [start, end]
+    if (current < start || current > end) {
+      v.currentTime = clamp(current, start, end);
     }
-    setPlayheadSecond(clamped);
-  }, [videoInfo, audioInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration, bgExport.startSecond, bgExport.endSecond, bgExport.duration]);
+    
+    // Clamp logical playhead to [start, limit]
+    if (playheadSecond < start || playheadSecond > limit) {
+      setPlayheadSecond(clamp(playheadSecond, start, limit));
+    }
+  }, [videoInfo, audioInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration, bgExport.startSecond, bgExport.endSecond, bgExport.duration, vidExport.outroEnabled, bgExport.outroEnabled]);
   useEffect(() => {
     const v = mediaElRef.current;
     const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? null;
     const params = videoInfo ? vidExport : bgExport;
     if (!v || !totalDuration) return;
     let raf: number | null = null;
+    let lastT = performance.now();
     const tick = () => {
-      const { end } = resolveExportRange(params, totalDuration);
-      const current = v.currentTime || 0;
-      if (!v.paused && current >= end) {
-        v.currentTime = end;
-        v.pause();
-        setPlaying(false);
+      const { end, outroDuration } = resolveExportRange(params, totalDuration);
+      const limit = end + outroDuration;
+      const vTime = v.currentTime || 0;
+      
+      const now = performance.now();
+      const dt = (now - lastT) / 1000;
+      lastT = now;
+
+      // Handle outro sound: only play if the global "playing" state is true AND we are in the outro range
+      const isOutroRange = outroDuration > 0 && playheadRef.current >= end && playheadRef.current < limit - 0.02;
+      const shouldPlayOutro = playingRef.current && isOutroRange;
+
+      if (shouldPlayOutro) {
+        if (outroAudioRef.current.paused) {
+          outroAudioRef.current.volume = outroVolume;
+          outroAudioRef.current.play().catch(() => {});
+        }
+      } else {
+        if (!outroAudioRef.current.paused) {
+          outroAudioRef.current.pause();
+          outroAudioRef.current.currentTime = 0;
+        }
       }
-      if (Math.abs(current - playheadRef.current) > 0.02) {
-        setPlayheadSecond(current);
+
+      if (playingRef.current) {
+        let nextP: number;
+        if (outroDuration > 0 && playheadRef.current >= end - 0.01) {
+          nextP = playheadRef.current + dt;
+        } else {
+          nextP = vTime;
+        }
+
+        if (nextP >= limit - 0.01) {
+          nextP = limit;
+          v.pause();
+          if (musicPlayerRef.current) musicPlayerRef.current.stop();
+          if (outroAudioRef.current) {
+            outroAudioRef.current.pause();
+            outroAudioRef.current.currentTime = 0;
+          }
+          setPlaying(false);
+          playingRef.current = false;
+        }
+        if (Math.abs(nextP - playheadRef.current) > 0.001) {
+          setPlayheadSecond(nextP);
+          playheadRef.current = nextP;
+        }
+      } else {
+        // When paused, sync playhead with media element UNLESS we are in the outro
+        if (playheadRef.current <= end + 0.01) {
+          if (Math.abs(vTime - playheadRef.current) > 0.02) {
+            setPlayheadSecond(vTime);
+          }
+        }
       }
       raf = requestAnimationFrame(tick);
     };
@@ -854,7 +943,7 @@ export const App: React.FC = () => {
     return () => {
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [videoInfo, audioInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration, bgExport.startSecond, bgExport.endSecond, bgExport.duration]);
+  }, [videoInfo, audioInfo, vidExport.startSecond, vidExport.endSecond, vidExport.duration, bgExport.startSecond, bgExport.endSecond, bgExport.duration, outroVolume]);
 
   // ---------- auto-save settings to active project ----------
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -868,10 +957,10 @@ export const App: React.FC = () => {
         captionMode, captionStyle, captionShader,
         layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn, music: musicLayerOn },
         activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
-        ui: { mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume },
+        ui: { mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume },
       }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume]);
+  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume]);
 
   // ---------- SSE stream for transcription progress ----------
   useEffect(() => {
@@ -1080,6 +1169,7 @@ export const App: React.FC = () => {
         if (proj.ui.audioSubTab) setAudioSubTab(proj.ui.audioSubTab);
         if (typeof proj.ui.muted === 'boolean') setMuted(proj.ui.muted);
         if (typeof proj.ui.mediaVolume === 'number') setMediaVolume(proj.ui.mediaVolume);
+        if (typeof proj.ui.outroVolume === 'number') setOutroVolume(proj.ui.outroVolume);
       }
       if (proj.layers) {
         setBgLayerOn(proj.layers.background ?? true);
@@ -1405,12 +1495,15 @@ export const App: React.FC = () => {
         const p = v.play();
         if (p && typeof p.catch === 'function') p.catch(() => setPlaying(false));
         // Start music alongside speech (its own free-running time, looped).
-        const mEl = musicElRef.current;
-        if (mEl && musicLayerOn) {
-          mEl.play().catch(() => {});
-        }
-        setPlaying(true);
-      };
+         const mEl = musicElRef.current;
+         if (mEl && musicLayerOn) {
+           // Align music 0:00 with the start handle
+           if (mEl.duration > 0) {
+             mEl.currentTime = (target - start) % mEl.duration;
+           }
+           mEl.play().catch(() => {});
+         }
+        setPlaying(true);      };
       if (Math.abs((v.currentTime || 0) - target) > 0.001) {
         const onSeeked = () => { v.removeEventListener('seeked', onSeeked); startPlayback(); };
         v.addEventListener('seeked', onSeeked);
@@ -1431,9 +1524,10 @@ export const App: React.FC = () => {
     if (!v) return;
     const totalDuration = videoInfo?.duration ?? audioInfo?.duration ?? v.duration;
     const params = videoInfo ? vidExport : bgExport;
-    const { start, end } = resolveExportRange(params, totalDuration);
-    const target = clamp(second, start, end);
-    v.currentTime = target;
+    const { start, end, outroDuration } = resolveExportRange(params, totalDuration);
+    const limit = end + outroDuration;
+    const target = clamp(second, start, limit);
+    v.currentTime = Math.min(target, end);
     setPlayheadSecond(target);
   };
 
@@ -1583,6 +1677,8 @@ export const App: React.FC = () => {
         totalFrames: total,
         startTime: range.start,
         duration: range.duration,
+        baseDuration: range.baseDuration,
+        outroDuration: range.outroDuration,
         layers: {
           background: bgLayerOn,
           video: videoLayerOn,
@@ -1613,11 +1709,13 @@ export const App: React.FC = () => {
         }
 
         if (videoLayerOn && videoRenderer && video) {
-          if (t > video.duration) break;
-          await seekVideoTo(video, t);
-          throwIfAborted();
-          videoRenderer.renderFrame(t);
-          ctx.drawImage(videoRenderer.renderer.domElement as HTMLCanvasElement, 0, 0, width, height);
+          const tVideo = range.outroDuration > 0 && t > range.end ? range.end : t;
+          if (tVideo <= video.duration) {
+            await seekVideoTo(video, tVideo);
+            throwIfAborted();
+            videoRenderer.renderFrame(tVideo);
+            ctx.drawImage(videoRenderer.renderer.domElement as HTMLCanvasElement, 0, 0, width, height);
+          }
         }
 
         if (captionsLayerOn && transcript) {
@@ -1629,6 +1727,13 @@ export const App: React.FC = () => {
             : previewFrame;
           
           const capScale = width / logicalCaptionFrame.w;
+
+          // Caption fade-out during outro: faded out by 3s of the 5s outro.
+          let capOpacity = 1;
+          if (range.outroDuration > 0 && t > range.end) {
+            const outroElapsed = t - range.end;
+            capOpacity = Math.max(0, 1 - outroElapsed / 3);
+          }
           
           if (capRenderer && capOffscreen) {
             const capCtx = capOffscreen.getContext('2d');
@@ -1636,11 +1741,32 @@ export const App: React.FC = () => {
                capCtx.clearRect(0, 0, width, height);
                drawCaptionsToCanvas(capCtx, transcript, captionMode, t * 1000, width, height, captionStyle, capScale);
                capRenderer.render(capOffscreen, captionShader, t);
+               ctx.globalAlpha = capOpacity;
                ctx.drawImage(capRenderer.canvas, 0, 0, width, height);
+               ctx.globalAlpha = 1;
             }
           } else {
+            ctx.globalAlpha = capOpacity;
             drawCaptionsToCanvas(ctx, transcript, captionMode, t * 1000, width, height, captionStyle, capScale);
+            ctx.globalAlpha = 1;
           }
+        }
+
+        // Draw outro transition overlay (white circle)
+        if (range.outroDuration > 0 && t > range.end) {
+          const outroElapsed = t - range.end;
+          const progress = Math.min(1, outroElapsed / range.outroDuration);
+          
+          // To cover the rectangle, the radius needs to reach the distance from center to corner
+          const centerX = width / 2;
+          const centerY = height / 2;
+          const maxRadius = Math.sqrt(centerX * centerX + centerY * centerY);
+          const radius = progress * maxRadius;
+
+          ctx.beginPath();
+          ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+          ctx.fillStyle = 'white';
+          ctx.fill();
         }
 
         const blob = await canvasToPngBlob(canvas);
@@ -1657,6 +1783,11 @@ export const App: React.FC = () => {
       setProjectStatus({ kind: 'progress', message: 'Stitching video with FFMPEG…', detail: created.folder });
       updateToast(toastId, 'PNG sequence complete. Stitching video…', 'progress');
       const finished = await finishProjectExport(projectId, created.exportId);
+      if (finished.error) {
+        updateToast(toastId, finished.error, 'error');
+        setProjectStatus({ kind: 'error', message: finished.error, detail: finished.folder });
+        return finished.folder;
+      }
       setProjectStatus({ kind: 'success', message: 'Video export complete', detail: finished.videoFile ? `${finished.folder}/${finished.videoFile}` : finished.folder });
       updateToast(toastId, finished.videoFile ? `Export complete: ${finished.videoFile}` : `Export complete: ${finished.folder}`, 'success');
       return finished.videoFile ? `${finished.folder}/${finished.videoFile}` : finished.folder;
@@ -1679,8 +1810,6 @@ export const App: React.FC = () => {
 
   // ---------- layout ----------
   const activeProject = projects.find((p) => p.id === activeProjectId);
-  const activeExportParams = videoInfo ? vidExport : bgExport;
-  const setActiveExportParams = videoInfo ? setVidExport : setBgExport;
   const exportLayerSummary = [
     bgLayerOn ? 'background' : null,
     videoLayerOn ? 'video' : null,
@@ -1717,9 +1846,6 @@ export const App: React.FC = () => {
 
   const audioMode = !!audioInfo && !videoInfo;
 
-  // Active export params + timeline range used by the preview-bottom timeline.
-  const timelineDuration = videoInfo?.duration ?? audioInfo?.duration ?? activeExportParams.duration ?? 10;
-  const timelineRange = resolveExportRange(activeExportParams, timelineDuration);
   const handleTimelineRangeChange = (s: number, e: number) => {
     setActiveExportParams({
       ...activeExportParams,
@@ -1731,6 +1857,12 @@ export const App: React.FC = () => {
   const handleTimelineSeek = (sec: number) => {
     if (mediaElRef.current) handleSeekPlayhead(sec);
     else setPlayheadSecond(sec);
+  };
+  const handleToggleOutro = () => {
+    setActiveExportParams({
+      ...activeExportParams,
+      outroEnabled: !activeExportParams.outroEnabled,
+    });
   };
 
   return (
@@ -1809,6 +1941,16 @@ export const App: React.FC = () => {
           const captionFrame = guide
             ? guideRectInVideoFrame(previewFrame, videoInfo, guide)
             : previewFrame;
+
+          // Caption fade-out during outro: faded out by 3s of the 5s outro.
+          let capOpacity = 1;
+          const { end, outroDuration } = resolveExportRange(activeExportParams, videoInfo?.duration ?? audioInfo?.duration ?? null);
+          if (outroDuration > 0 && playheadSecond > end) {
+            const outroElapsed = playheadSecond - end;
+            const fadeTargetSec = 3;
+            capOpacity = Math.max(0, 1 - outroElapsed / fadeTargetSec);
+          }
+
           return (
             <ShaderCaptions
               transcript={transcript}
@@ -1817,13 +1959,33 @@ export const App: React.FC = () => {
               frame={captionFrame}
               timeSourceRef={mediaElRef}
               shader={captionShader}
+              playhead={playheadSecond}
+              opacity={capOpacity}
             />
           );
-        })()}
+          })()}
+            {/* outro transition overlay */}
+            {activeExportParams.outroEnabled && (() => {
+              const { end, outroDuration } = resolveExportRange(activeExportParams, videoInfo?.duration ?? audioInfo?.duration ?? null);
 
-        {/* status toasts */}
-        <StatusToast toasts={toasts} onDismiss={dismissToast} />
+              const guide = cropToGuide
+                ? availableGuides.find((g) => g.key === activeGuide)
+                : undefined;
+              const overlayFrame = guide && videoInfo
+                ? guideRectInVideoFrame(previewFrame, videoInfo, guide)
+                : previewFrame;
 
+              return (
+                <OutroOverlay
+                  frame={overlayFrame}
+                  playhead={playheadSecond}
+                  outroStart={end}
+                  outroDuration={outroDuration}
+                />
+              );
+            })()}
+            {/* status toasts */}
+            <StatusToast toasts={toasts} onDismiss={dismissToast} />
         {!videoInfo && !audioInfo && (
           <div
             onDrop={onDrop}
@@ -1843,12 +2005,14 @@ export const App: React.FC = () => {
 
       {/* dedicated preview-bottom timeline (range handles + zoom + scroll) */}
       <PreviewTimeline
-        duration={timelineDuration}
+        duration={mediaDuration}
         start={timelineRange.start}
         end={timelineRange.end}
         playhead={playheadSecond}
         onRangeChange={handleTimelineRangeChange}
         onPlayheadChange={handleTimelineSeek}
+        outroEnabled={activeExportParams.outroEnabled}
+        onToggleOutro={handleToggleOutro}
       />
       </div>
 
@@ -2200,6 +2364,8 @@ export const App: React.FC = () => {
                   limiter={limiter}
                   onLimiterChange={setLimiter}
                   limiterReductionRef={limiterReductionRef}
+                  outroVolume={outroVolume}
+                  onOutroVolumeChange={setOutroVolume}
                 />
               )}
             </>

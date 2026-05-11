@@ -76,7 +76,8 @@ async function stitchVideo(projectId: string, exportId: string) {
   if (!fs.existsSync(manifestPath)) return null;
 
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-  const { prefix, fps, startTime, duration } = manifest;
+  const prefix = (manifest.prefix || '').trim();
+  const { fps, startTime, duration } = manifest;
 
   // When the background layer was OFF for the export, the PNG sequence has
   // an alpha channel. libx264/yuv420p (the .mp4 path) cannot preserve alpha
@@ -84,8 +85,13 @@ async function stitchVideo(projectId: string, exportId: string) {
   // instead, which Resolve and other NLEs accept as an alpha-capable video.
   const wantAlpha = manifest?.layers?.background === false;
   const ext = wantAlpha ? 'mov' : 'mp4';
-  const outPath = path.join(dir, `${prefix || 'video'}.${ext}`);
-  const pattern = path.join(dir, `${prefix ? prefix + '_' : '_'}%05d.png`);
+  // Output filename: use trimmed prefix (or project name)
+  const outName = prefix || proj.name?.trim() || 'video';
+  const outPath = path.join(dir, `${outName}.${ext}`);
+  // Input pattern: normalize multiple spaces to single dash, then convert remaining spaces to dashes
+  // (frontend converts spaces when saving PNGs)
+  const inputPrefix = prefix.replace(/ +/g, '-').replace(/ /g, '-');
+  const pattern = path.join(dir, `${inputPrefix ? inputPrefix + '_' : '_'}%05d.png`);
 
   // Build FFMPEG command
   // Input 0: PNG sequence
@@ -93,7 +99,7 @@ async function stitchVideo(projectId: string, exportId: string) {
   let filterComplex = '';
   let audioMap = '';
 
-  const audioSources: { path: string; volume: number }[] = [];
+  const audioSources: { path: string; volume: number; isOutro?: boolean }[] = [];
   const pDir = projectDir(projectId);
 
   // Source 1: Main audio (from video or audio file)
@@ -110,76 +116,88 @@ async function stitchVideo(projectId: string, exportId: string) {
     const musicVol = typeof settings?.music?.volume === 'number' ? settings.music.volume : 0.5;
     const musicLayerOn = settings?.layers?.music !== false;
     
-    console.log(`[export] Music check: file=${proj.musicFile}, exists=${exists}, volume=${musicVol}, layerOn=${musicLayerOn}`);
-    
     if (exists && musicLayerOn) {
       audioSources.push({ path: musicPath, volume: musicVol });
     }
   }
 
+  // Source 3: Outro sound
+  const outroDuration = manifest.outroDuration || 0;
+  if (outroDuration > 0) {
+    const outroPath = path.resolve(__dirname, '../audio/bassnoise.wav');
+    if (fs.existsSync(outroPath)) {
+      const outroVol = typeof settings?.ui?.outroVolume === 'number' ? settings.ui.outroVolume : 0.5;
+      audioSources.push({ path: outroPath, volume: outroVol, isOutro: true });
+    }
+  }
+
   if (audioSources.length > 0) {
     audioSources.forEach((src, i) => {
-      const isMusic = i > 0; // The first source is always the main audio/video
+      const isMusic = i > 0 && !src.isOutro;
+      const isOutro = src.isOutro;
       const loopStr = isMusic ? '-stream_loop -1 ' : '';
-      const ssStr = isMusic ? '' : `-ss ${startTime || 0} `;
+      // Music starts at 0:00 relative to the start handle (which is 0:00 in the output video)
+      const ssStr = (isOutro || isMusic) ? '' : `-ss ${startTime || 0} `;
       inputs += ` ${loopStr}${ssStr}-t ${duration || 0} -i "${src.path}"`;
     });
 
-    if (audioSources.length === 1) {
-      const vol = audioSources[0].volume;
-      if (vol !== 1) {
-        filterComplex = ` -filter_complex "[1:a]volume=${vol.toFixed(2)}[aout]"`;
-        audioMap = '-map 0:v -map "[aout]"';
+    // We use a more flexible mixing approach to handle 1-3 sources.
+    const sc = settings?.music?.sidechain;
+    const scEnabled = sc?.enabled !== false;
+    const threshold = sc?.threshold ?? 0.1;
+    const ratio = 1.0 / (1.0 - (sc?.amount ?? 0.5));
+    const attack = sc?.attackMs ?? 80;
+    const release = sc?.releaseMs ?? 350;
+
+    const lim = settings?.limiter;
+    const limEnabled = lim?.enabled !== false;
+    const limIn = limEnabled ? Math.pow(10, (lim?.inputGainDb ?? 0) / 20) : 1;
+    const limThresh = limEnabled ? Math.max(0.063, Math.pow(10, (lim?.thresholdDb ?? -6) / 20)) : 1;
+    const limOut = limEnabled ? Math.pow(10, (lim?.outputGainDb ?? 0) / 20) : 1;
+    const limRelease = lim?.releaseSec ?? 0.25;
+
+    let filter = '';
+    let mixCount = 0;
+
+    // Process each source into a named label
+    audioSources.forEach((src, i) => {
+      const idx = i + 1;
+      if (i === 0) {
+        // Main audio: volume -> limiter -> pad to full duration -> split
+        const totalMs = Math.round(duration * 1000);
+        filter += `[${idx}:a]volume=${(src.volume * limIn).toFixed(2)}`;
+        if (limEnabled) {
+          filter += `,alimiter=level_in=1:level_out=1:limit=${limThresh.toFixed(3)}:attack=5:release=${(limRelease * 1000).toFixed(0)}`;
+        }
+        // apad ensures this stream lasts for the entire duration (base + outro)
+        filter += `,volume=${limOut.toFixed(2)},apad=whole_dur=${duration.toFixed(3)},asplit=2[speech_trigger][speech_mix];`;
+      } else if (src.isOutro) {
+        // Outro: volume -> adelay
+        const delayMs = Math.round((manifest.baseDuration || 0) * 1000);
+        filter += `[${idx}:a]volume=${src.volume.toFixed(2)},adelay=${delayMs}|${delayMs}[outro_mix];`;
       } else {
-        audioMap = '-map 0:v -map 1:a';
+        // Music: volume -> sidechain compress (if enabled)
+        filter += `[${idx}:a]volume=${src.volume.toFixed(2)}[music_pre];`;
+        if (scEnabled) {
+          filter += `[music_pre][speech_trigger]sidechaincompress=threshold=${threshold}:ratio=${ratio.toFixed(2)}:attack=${attack}:release=${release}[music_mix];`;
+        } else {
+          filter += `[music_pre]anull[music_mix];`;
+        }
       }
-    } else {
-      // Mix multiple audio sources with volumes and sidechain ducking (speech ducks music)
-      // Input 1: Main Audio (speech)
-      // Input 2: Background Music
-      const sc = settings?.music?.sidechain;
-      const scEnabled = sc?.enabled !== false;
-      const threshold = sc?.threshold ?? 0.1;
-      const ratio = 1.0 / (1.0 - (sc?.amount ?? 0.5)); // Map 0..1 amount to compression ratio
-      const attack = sc?.attackMs ?? 80;
-      const release = sc?.releaseMs ?? 350;
+    });
 
-      // Filter:
-      // 1. Set individual volumes
-      // 2. Sidechain compress Input 2 using Input 1 as trigger
-      // 3. Mix the results
-      // 1. Set individual volumes and apply the Speech Limiter (matching AudioSource.ts)
-      const lim = settings?.limiter;
-      const limEnabled = lim?.enabled !== false;
-      const limIn = limEnabled ? Math.pow(10, (lim?.inputGainDb ?? 0) / 20) : 1;
-      const limThresh = limEnabled ? Math.max(0.063, Math.pow(10, (lim?.thresholdDb ?? -6) / 20)) : 1;
-      const limOut = limEnabled ? Math.pow(10, (lim?.outputGainDb ?? 0) / 20) : 1;
-      const limRelease = lim?.releaseSec ?? 0.25;
+    // Final mix
+    const mixLabels = [];
+    if (audioSources.find(s => !s.isOutro && audioSources.indexOf(s) === 0)) mixLabels.push('[speech_mix]');
+    if (audioSources.find(s => !s.isOutro && audioSources.indexOf(s) > 0)) mixLabels.push('[music_mix]');
+    if (audioSources.find(s => s.isOutro)) mixLabels.push('[outro_mix]');
 
-      // Filter:
-      // a. Process speech: volume -> limiter (if enabled)
-      filterComplex = `[1:a]volume=${(audioSources[0].volume * limIn).toFixed(2)}`;
-      if (limEnabled) {
-        // alimiter: level_in is 1 because we applied limIn already.
-        // limit is the threshold.
-        filterComplex += `,alimiter=level_in=1:level_out=1:limit=${limThresh.toFixed(3)}:attack=5:release=${(limRelease * 1000).toFixed(0)}`;
-      }
-      filterComplex += `,volume=${limOut.toFixed(2)},asplit=2[speech_trigger][speech_mix];`;
+    filter += `${mixLabels.join('')}amix=inputs=${mixLabels.length}:dropout_transition=0`;
+    // amix scales down volume by 1/n; scale it back up by n but leave headroom
+    filter += `,volume=${mixLabels.length},alimiter=limit=0.9[aout]`;
 
-      // b. Process music: volume -> sidechain ducking
-      filterComplex += `[2:a]volume=${audioSources[1].volume.toFixed(2)}[music_raw];`;
-      
-      if (scEnabled) {
-        // sidechaincompress: music is compressed by speech
-        filterComplex += `[music_raw][speech_trigger]sidechaincompress=threshold=${threshold}:ratio=${ratio.toFixed(2)}:attack=${attack}:release=${release}[music_ducked];`;
-        filterComplex += `[speech_mix][music_ducked]amix=inputs=2:duration=first:dropout_transition=0,volume=2,alimiter=limit=0.9[aout]`;
-      } else {
-        filterComplex += `[speech_mix][music_raw]amix=inputs=2:duration=first:dropout_transition=0,volume=2,alimiter=limit=0.9[aout]`;
-      }
-
-      filterComplex = ` -filter_complex "${filterComplex}"`;
-      audioMap = '-map 0:v -map "[aout]"';
-    }
+    filterComplex = ` -filter_complex "${filter}"`;
+    audioMap = '-map 0:v -map "[aout]"';
   } else {
     audioMap = '-map 0:v';
   }
@@ -192,7 +210,7 @@ async function stitchVideo(projectId: string, exportId: string) {
     ? '-c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le -alpha_bits 16 -vendor apl0'
     : '-c:v libx264 -crf 18 -pix_fmt yuv420p';
   const audioCodec = wantAlpha ? '-c:a pcm_s16le' : '-c:a aac -b:a 192k';
-  const cmd = `ffmpeg -y ${inputs}${filterComplex} ${audioMap} ${videoCodec} ${audioCodec} -shortest "${outPath}"`;
+  const cmd = `ffmpeg -y ${inputs}${filterComplex} ${audioMap} ${videoCodec} ${audioCodec} "${outPath}"`;
 
   console.log(`[export] Stitching video (alpha=${wantAlpha}): ${cmd}`);
   try {
@@ -640,6 +658,7 @@ app.post('/api/projects/:id/exports/:exportId/finish', async (req, res) => {
 
   // Trigger FFMPEG stitching
   let videoFile = null;
+  let stitchError = null;
   try {
     videoFile = await stitchVideo(id, exportId);
     if (videoFile) {
@@ -651,6 +670,14 @@ app.post('/api/projects/:id/exports/:exportId/finish', async (req, res) => {
     }
   } catch (err) {
     console.error('Stitching failed', err);
+    stitchError = err instanceof Error ? err.message : String(err);
+    const logPath = path.join(dir, 'stitch-error.log');
+    fs.writeFileSync(logPath, `${new Date().toISOString()}\n${stitchError}\n\n`);
+  }
+
+  if (stitchError) {
+    res.json({ ok: false, error: `Video stitching failed: ${stitchError}`, folder: `projects/${id}/exports/${exportId}` });
+    return;
   }
 
   proj.updatedAt = new Date().toISOString();

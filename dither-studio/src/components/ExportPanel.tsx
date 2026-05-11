@@ -36,7 +36,8 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
   const start = clamp(params.startSecond, 0, Math.max(0, totalDuration - minGap));
   const fallbackEnd = params.endSecond ?? Math.min(totalDuration, start + Math.max(minGap, params.duration));
   const end = clamp(fallbackEnd, start + minGap, totalDuration);
-  const totalFrames = Math.max(1, Math.ceil((end - start) * params.fps));
+  const outroDuration = params.outroEnabled ? 5 : 0;
+  const totalFrames = Math.max(1, Math.ceil((end - start + outroDuration) * params.fps));
 
   const set = (patch: Partial<ExportParams>) => onChange({ ...params, ...patch });
 

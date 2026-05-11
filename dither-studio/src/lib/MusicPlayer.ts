@@ -47,6 +47,13 @@ export class MusicPlayer {
     this.element = element;
   }
 
+  /** Stops the music player and resets the audio position. */
+  stop() {
+    this.element.pause();
+    this.element.currentTime = 0;
+    this.resetDuck();
+  }
+
   /** Lazily build the Web Audio graph (must be called from a user gesture). */
   ensureGraph() {
     if (this.ctx) return;

@@ -16,6 +16,10 @@ interface CaptionsProps {
   frame: { x: number; y: number; w: number; h: number };
   /** something whose .currentTime is read each frame (in seconds) */
   timeSourceRef: React.MutableRefObject<HTMLMediaElement | null>;
+  /** Optional playhead override in seconds (used during the outro) */
+  playhead?: number;
+  /** Opacity override (0..1) */
+  opacity?: number;
 }
 
 const isWordActive = (w: TranscriptWord, ms: number) =>
@@ -37,7 +41,7 @@ const splitWordParts = (text: string): { lead: string; body: string; trail: stri
   return { lead: lead ?? '', body, trail: trail ?? '' };
 };
 
-export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DEFAULT_CAPTION_STYLE, frame, timeSourceRef }) => {
+export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DEFAULT_CAPTION_STYLE, frame, timeSourceRef, playhead, opacity = 1 }) => {
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const rafRef = useRef<number | null>(null);
   const captionStyle = { ...DEFAULT_CAPTION_STYLE, ...style };
@@ -45,8 +49,13 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
   // poll currentTime every frame
   useEffect(() => {
     const tick = () => {
-      const v = timeSourceRef.current;
-      const t = v ? v.currentTime * 1000 : 0;
+      let t: number;
+      if (playhead !== undefined) {
+        t = playhead * 1000;
+      } else {
+        const v = timeSourceRef.current;
+        t = v ? v.currentTime * 1000 : 0;
+      }
       setCurrentTimeMs(t);
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -135,6 +144,7 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
     overflow: 'visible',
     pointerEvents: 'none',
     fontFamily: captionStyle.fontFamily,
+    opacity,
   };
   const buildBoxStyle = (boxWidth: number): React.CSSProperties => {
     const boxLeft = ((100 - boxWidth) * captionStyle.horizontalPosition) / 100;

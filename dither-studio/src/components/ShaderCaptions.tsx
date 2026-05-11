@@ -26,10 +26,14 @@ interface ShaderCaptionsProps {
   frame: { x: number; y: number; w: number; h: number };
   timeSourceRef: React.MutableRefObject<HTMLMediaElement | null>;
   shader: CaptionShaderParams;
+  /** Optional playhead override in seconds (used during the outro) */
+  playhead?: number;
+  /** Opacity override (0..1) */
+  opacity?: number;
 }
 
 export const ShaderCaptions: React.FC<ShaderCaptionsProps> = ({
-  transcript, mode, style, frame, timeSourceRef, shader,
+  transcript, mode, style, frame, timeSourceRef, shader, playhead, opacity = 1,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenRef = useRef<HTMLCanvasElement | null>(null);
@@ -41,12 +45,14 @@ export const ShaderCaptions: React.FC<ShaderCaptionsProps> = ({
   const modeRef = useRef(mode);
   const transcriptRef = useRef(transcript);
   const frameRef = useRef(frame);
+  const playheadRef = useRef(playhead);
 
   useEffect(() => { shaderRef.current = shader; }, [shader]);
   useEffect(() => { styleRef.current = style; }, [style]);
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { transcriptRef.current = transcript; }, [transcript]);
   useEffect(() => { frameRef.current = frame; }, [frame]);
+  useEffect(() => { playheadRef.current = playhead; }, [playhead]);
 
   // Initialize the WebGL renderer + offscreen 2D canvas once, when shader
   // becomes enabled. Tearing this down/up on every parameter change would
@@ -94,8 +100,13 @@ export const ShaderCaptions: React.FC<ShaderCaptionsProps> = ({
         // Render in CSS-pixel coordinates (the existing caption canvas code
         // assumes that), then scale up for the device-pixel backing buffer.
         ctx.scale(dpr, dpr);
-        const t = timeSourceRef.current;
-        const timeMs = t ? t.currentTime * 1000 : 0;
+        let timeMs: number;
+        if (playheadRef.current !== undefined) {
+          timeMs = playheadRef.current * 1000;
+        } else {
+          const t = timeSourceRef.current;
+          timeMs = t ? t.currentTime * 1000 : 0;
+        }
         const effectiveStyle = styleRef.current ?? DEFAULT_CAPTION_STYLE;
         drawCaptionsToCanvas(
           ctx, transcriptRef.current, modeRef.current, timeMs, f.w, f.h, effectiveStyle,
@@ -132,6 +143,8 @@ export const ShaderCaptions: React.FC<ShaderCaptionsProps> = ({
         style={style}
         frame={frame}
         timeSourceRef={timeSourceRef}
+        playhead={playhead}
+        opacity={opacity}
       />
     );
   }
@@ -143,6 +156,7 @@ export const ShaderCaptions: React.FC<ShaderCaptionsProps> = ({
     width: frame.w,
     height: frame.h,
     pointerEvents: 'none',
+    opacity,
   };
   return <canvas ref={canvasRef} style={canvasStyle} />;
 };

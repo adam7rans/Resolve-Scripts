@@ -12,10 +12,14 @@ export interface PreviewTimelineProps {
   /** Called when the user drags either of the start/end handles. */
   onRangeChange: (start: number, end: number) => void;
   /** Called when the user clicks/drags on the track to scrub. */
-  onPlayheadChange: (p: number) => void;
+  onPlayheadChange: (playhead: number) => void;
+  /** Is the 5s outro extension enabled? */
+  outroEnabled?: boolean;
+  onToggleOutro?: () => void;
 }
 
 const HANDLE_W = 10;
+const OUTRO_DUR = 5;
 const MIN_VIEW_SEC = 0.05;
 
 function clamp(v: number, mn: number, mx: number) { return Math.min(mx, Math.max(mn, v)); }
@@ -39,11 +43,13 @@ type DragKind = null | 'start' | 'end' | 'play' | 'scroll';
  */
 export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   duration, start, end, playhead, onRangeChange, onPlayheadChange,
+  outroEnabled, onToggleOutro,
 }) => {
   const totalDuration = Math.max(0.01, duration);
+  const projectDuration = totalDuration + (outroEnabled ? OUTRO_DUR : 0);
 
-  // Visible window in seconds. Defaults to the full duration; user can zoom/pan.
-  const [view, setView] = useState<{ s: number; e: number }>({ s: 0, e: totalDuration });
+  // Visible window in seconds. Defaults to the full project duration; user can zoom/pan.
+  const [view, setView] = useState<{ s: number; e: number }>({ s: 0, e: projectDuration });
 
   // Track the latest start/end without retriggering the auto-focus effect.
   const startRef = useRef(start);
@@ -54,22 +60,22 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   // view on the export area (same behaviour as clicking "Focus Export Area")
   // so the user can immediately see and adjust both handles.
   useEffect(() => {
-    if (totalDuration <= MIN_VIEW_SEC * 1.5) return;
+    if (projectDuration <= MIN_VIEW_SEC * 1.5) return;
     const s = startRef.current;
     const e = endRef.current;
     const exportSpan = Math.max(MIN_VIEW_SEC, e - s);
     const padFrac = 0.05; // 5% pad on each side -> handles fill ~90% of view
-    const newSpan = Math.min(totalDuration, exportSpan / (1 - padFrac * 2));
+    const newSpan = Math.min(projectDuration, exportSpan / (1 - padFrac * 2));
     const center = (s + e) / 2;
     let ns = center - newSpan / 2;
     let ne = center + newSpan / 2;
-    if (ne > totalDuration) { ne = totalDuration; ns = Math.max(0, ne - newSpan); }
-    if (ns < 0) { ns = 0; ne = Math.min(totalDuration, ns + newSpan); }
+    if (ne > projectDuration) { ne = projectDuration; ns = Math.max(0, ne - newSpan); }
+    if (ns < 0) { ns = 0; ne = Math.min(projectDuration, ns + newSpan); }
     setView({ s: ns, e: ne });
-  }, [totalDuration]);
+  }, [projectDuration]);
 
   const viewStart = view.s;
-  const viewEnd = Math.max(view.s + MIN_VIEW_SEC, Math.min(view.e, totalDuration));
+  const viewEnd = Math.max(view.s + MIN_VIEW_SEC, Math.min(view.e, projectDuration));
   const viewSpan = Math.max(MIN_VIEW_SEC, viewEnd - viewStart);
 
   const trackRef = useRef<HTMLDivElement | null>(null);
@@ -83,7 +89,7 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
     const r = trackRef.current?.getBoundingClientRect();
     if (!r) return 0;
     const x = clamp(clientX - r.left, 0, r.width);
-    return clamp(viewStart + (x / r.width) * viewSpan, 0, totalDuration);
+    return clamp(viewStart + (x / r.width) * viewSpan, 0, projectDuration);
   };
 
   // Global pointer move/up while dragging anything.
@@ -101,10 +107,10 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
       } else if (dragKind === 'scroll') {
         const r = scrollRef.current?.getBoundingClientRect();
         if (!r) return;
-        const thumbW = (viewSpan / totalDuration) * r.width;
+        const thumbW = (viewSpan / projectDuration) * r.width;
         const localX = e.clientX - r.left - dragOffsetRef.current;
         const newThumbStart = clamp(localX, 0, Math.max(0, r.width - thumbW));
-        const newViewStart = clamp((newThumbStart / r.width) * totalDuration, 0, Math.max(0, totalDuration - viewSpan));
+        const newViewStart = clamp((newThumbStart / r.width) * projectDuration, 0, Math.max(0, projectDuration - viewSpan));
         setView({ s: newViewStart, e: newViewStart + viewSpan });
       }
     };
@@ -117,7 +123,7 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [dragKind, viewSpan, totalDuration, start, end, onRangeChange, onPlayheadChange, viewStart]);
+  }, [dragKind, viewSpan, projectDuration, start, end, onRangeChange, onPlayheadChange, viewStart]);
 
   const startDrag = (kind: Exclude<DragKind, null | 'scroll'>) => (e: React.PointerEvent) => {
     e.preventDefault();
@@ -128,18 +134,18 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
 
   // ----- view helpers -----
   const setViewClamped = (s: number, e: number) => {
-    let span = Math.max(MIN_VIEW_SEC, Math.min(totalDuration, e - s));
+    let span = Math.max(MIN_VIEW_SEC, Math.min(projectDuration, e - s));
     let ns = s;
     let ne = ns + span;
-    if (ne > totalDuration) { ne = totalDuration; ns = Math.max(0, ne - span); }
-    if (ns < 0) { ns = 0; ne = Math.min(totalDuration, ns + span); }
+    if (ne > projectDuration) { ne = projectDuration; ns = Math.max(0, ne - span); }
+    if (ns < 0) { ns = 0; ne = Math.min(projectDuration, ns + span); }
     setView({ s: ns, e: ne });
   };
 
   const focusExportArea = () => {
     const exportSpan = Math.max(MIN_VIEW_SEC, end - start);
     const padFrac = 0.05; // 5% pad on each side -> handles fill ~90% of view
-    const newSpan = Math.min(totalDuration, exportSpan / (1 - padFrac * 2));
+    const newSpan = Math.min(projectDuration, exportSpan / (1 - padFrac * 2));
     const center = (start + end) / 2;
     setViewClamped(center - newSpan / 2, center + newSpan / 2);
   };
@@ -157,15 +163,15 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
 
   const zoomOut = () => {
     const center = (viewStart + viewEnd) / 2;
-    const newSpan = Math.min(totalDuration, viewSpan * 2);
+    const newSpan = Math.min(projectDuration, viewSpan * 2);
     setViewClamped(center - newSpan / 2, center + newSpan / 2);
   };
 
-  const resetView = () => setView({ s: 0, e: totalDuration });
+  const resetView = () => setView({ s: 0, e: projectDuration });
 
   // Scrollbar geometry
-  const scrollThumbPct = (viewSpan / totalDuration) * 100;
-  const scrollThumbLeftPct = (viewStart / totalDuration) * 100;
+  const scrollThumbPct = (viewSpan / projectDuration) * 100;
+  const scrollThumbLeftPct = (viewStart / projectDuration) * 100;
 
   const onScrollDown: React.PointerEventHandler<HTMLDivElement> = (e) => {
     const r = scrollRef.current?.getBoundingClientRect();
@@ -173,15 +179,15 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
     e.preventDefault();
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
     const x = e.clientX - r.left;
-    const thumbW = (viewSpan / totalDuration) * r.width;
-    const thumbX = (viewStart / totalDuration) * r.width;
+    const thumbW = (viewSpan / projectDuration) * r.width;
+    const thumbX = (viewStart / projectDuration) * r.width;
     if (x >= thumbX && x <= thumbX + thumbW) {
       dragOffsetRef.current = x - thumbX;
     } else {
       // Click outside the thumb: jump so the click is centered on the thumb.
       dragOffsetRef.current = thumbW / 2;
       const newThumbStart = clamp(x - thumbW / 2, 0, Math.max(0, r.width - thumbW));
-      const newViewStart = clamp((newThumbStart / r.width) * totalDuration, 0, Math.max(0, totalDuration - viewSpan));
+      const newViewStart = clamp((newThumbStart / r.width) * projectDuration, 0, Math.max(0, projectDuration - viewSpan));
       setView({ s: newViewStart, e: newViewStart + viewSpan });
     }
     setDragKind('scroll');
@@ -251,6 +257,31 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
             pointerEvents: 'none',
           }} />
         )}
+
+        {/* outro block (orange 5s extension after end handle) */}
+        {outroEnabled && (() => {
+          const oStart = end;
+          const oEnd = end + OUTRO_DUR;
+          const oL = clamp(secToPct(oStart), 0, 100);
+          const oR = clamp(secToPct(oEnd), 0, 100);
+          if (oR <= oL) return null;
+          return (
+            <div
+              title={`Outro: ${fmt(oStart)} – ${fmt(oEnd)}`}
+              style={{
+                position: 'absolute',
+                left: `${oL}%`,
+                width: `${oR - oL}%`,
+                top: 0, bottom: 0,
+                background: '#eb6f1f66',
+                borderLeft: '1px solid #eb6f1f',
+                borderRight: (oR < 100) ? '1px solid #eb6f1f' : 'none',
+                pointerEvents: 'none',
+                zIndex: 1,
+              }}
+            />
+          );
+        })()}
 
         {/* off-screen indicators */}
         {!startInView && visStart < 0 && (
@@ -341,6 +372,22 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
         <button style={btn} onClick={zoomIn} title="Zoom in (centered on the midpoint between the start and end handles)">Zoom In</button>
         <button style={btn} onClick={zoomOut} title="Zoom out">Zoom Out</button>
         <button style={btn} onClick={resetView} title="Show the full duration">Reset</button>
+
+        {onToggleOutro && (
+          <button
+            style={{ 
+              ...btn, 
+              marginLeft: 'auto', 
+              background: outroEnabled ? '#eb6f1f44' : '#1a1a1a',
+              borderColor: outroEnabled ? '#eb6f1f' : '#2a2a2a',
+              color: outroEnabled ? '#fff' : '#aaa'
+            }}
+            onClick={onToggleOutro}
+            title="Add a 5-second frozen-frame extension at the end of the video"
+          >
+            {outroEnabled ? '✓ Outro (5s)' : '+ Outro'}
+          </button>
+        )}
       </div>
     </div>
   );
