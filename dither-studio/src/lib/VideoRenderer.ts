@@ -88,6 +88,22 @@ export class VideoRenderer {
   private applyParams() {
     const u = this.material.uniforms;
     const p = this.params;
+    // pre-shader gradient overlay
+    u.uGradientEnabled.value = p.gradientEnabled;
+    u.uGradientType.value = p.gradientType;
+    setVec3FromHex(u.uGradientColorA.value, p.gradientColorA);
+    u.uGradientOpacityA.value = p.gradientOpacityA;
+    setVec3FromHex(u.uGradientColorB.value, p.gradientColorB);
+    u.uGradientOpacityB.value = p.gradientOpacityB;
+    u.uGradientOpacity.value = p.gradientOpacity;
+    u.uGradientBlendMode.value = p.gradientBlendMode;
+    u.uGradientAngle.value = p.gradientAngle;
+    u.uGradientScale.value = p.gradientScale;
+    u.uGradientOffsetX.value = p.gradientOffsetX;
+    u.uGradientOffsetY.value = p.gradientOffsetY;
+    // shader bypass
+    u.uShaderEnabled.value = p.shaderEnabled;
+    // levels/tone/color
     u.uBlackPoint.value = p.blackPoint;
     u.uWhitePoint.value = p.whitePoint;
     u.uBrightness.value = p.brightness;
@@ -99,6 +115,9 @@ export class VideoRenderer {
     u.uGamma.value = p.gamma;
     u.uSaturation.value = p.saturation;
     u.uClarity.value = p.clarity;
+    u.uPositionX.value = p.positionX;
+    u.uPositionY.value = p.positionY;
+    u.uPositionRotation.value = p.positionRotation;
     u.uRotation.value = p.rotation;
     u.uScale.value = p.scale;
     u.uDistortionFrequency.value = p.distortionFrequency;
@@ -110,11 +129,14 @@ export class VideoRenderer {
     u.uDitherScale.value = p.ditherScale;
     u.uThreshold.value = p.threshold;
     u.uAlphaThreshold.value = p.alphaThreshold;
-    u.uUseSingleColor.value = p.useSingleColor;
-    u.uIsDarkMode.value = p.isDarkMode;
+    u.uDitherGradient.value = p.ditherGradient;
     setVec3FromHex(u.uDitherColor.value, p.ditherColor);
-    setVec3FromHex(u.uLightModeColor.value, p.lightModeColor);
-    setVec3FromHex(u.uDarkModeColor.value, p.darkModeColor);
+    setVec3FromHex(u.uDitherGradientColorA.value, p.ditherGradientColorA);
+    setVec3FromHex(u.uDitherGradientColorB.value, p.ditherGradientColorB);
+    u.uDitherGradientAngle.value = p.ditherGradientAngle;
+    u.uDitherGradientScale.value = p.ditherGradientScale;
+    u.uDitherGradientOffsetX.value = p.ditherGradientOffsetX;
+    u.uDitherGradientOffsetY.value = p.ditherGradientOffsetY;
   }
 
   /** Render the current video frame. */

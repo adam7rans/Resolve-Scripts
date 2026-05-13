@@ -1,11 +1,36 @@
 import React from 'react';
 
-export const Section: React.FC<{ title: string; onReset?: () => void; children: React.ReactNode }> = ({ title, onReset, children }) => (
+export const Section: React.FC<{
+  title: string;
+  onReset?: () => void;
+  /** Optional on/off toggle rendered next to the title. */
+  enabled?: boolean;
+  onToggle?: (v: boolean) => void;
+  children: React.ReactNode;
+}> = ({ title, onReset, enabled, onToggle, children }) => (
   <div style={{
     border: '1px solid #222', borderRadius: 4, padding: 10, marginBottom: 10, background: '#141414',
+    opacity: enabled === false ? 0.5 : 1, transition: 'opacity 150ms',
   }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-      <div style={{ color: '#888', textTransform: 'uppercase', letterSpacing: 1 }}>{title}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ color: '#888', textTransform: 'uppercase', letterSpacing: 1 }}>{title}</div>
+        {onToggle && (
+          <button
+            onClick={() => onToggle(!enabled)}
+            style={{
+              width: 32, height: 16, borderRadius: 8, border: 'none', padding: 0, cursor: 'pointer',
+              background: enabled ? '#1f6feb' : '#333', position: 'relative', transition: 'background 150ms',
+            }}
+          >
+            <span style={{
+              position: 'absolute', top: 2, left: enabled ? 16 : 2,
+              width: 12, height: 12, borderRadius: 6, background: '#fff',
+              transition: 'left 150ms',
+            }} />
+          </button>
+        )}
+      </div>
       {onReset && (
         <button
           onClick={onReset}

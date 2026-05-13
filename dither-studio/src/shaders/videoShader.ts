@@ -10,6 +10,20 @@ void main() {
 export const dancingVideoFragmentShader = `
 uniform sampler2D tDiffuse;
 uniform vec2 uResolution;
+// pre-shader gradient overlay
+uniform bool uGradientEnabled;
+uniform int uGradientType;           // 0 = linear, 1 = radial
+uniform vec3 uGradientColorA;
+uniform float uGradientOpacityA;
+uniform vec3 uGradientColorB;
+uniform float uGradientOpacityB;
+uniform float uGradientOpacity;
+uniform int uGradientBlendMode;      // 0 = normal, 1 = multiply, 2 = screen, 3 = overlay
+uniform float uGradientAngle;
+uniform float uGradientScale;
+uniform float uGradientOffsetX;
+uniform float uGradientOffsetY;
+uniform bool uShaderEnabled;
 uniform float uDitherScale;
 uniform float uContrast;
 uniform float uBrightness;
@@ -27,16 +41,22 @@ uniform float uErrorDiffusion;
 uniform float uThreshold;
 uniform float uAlphaThreshold; // Threshold for bright pixels to become transparent
 uniform float uTime; // For animation effects
-uniform bool uUseSingleColor; // Use single color for dither pixels
 uniform bool uDitherEnabled;
-uniform vec3 uDitherColor; // Single color for dither pixels
-uniform vec3 uLightModeColor; // Color for rendered pixels in light mode
-uniform vec3 uDarkModeColor; // Color for rendered pixels in dark mode
-uniform bool uIsDarkMode; // Current theme mode
+uniform bool uDitherGradient; // false = single flat color, true = spatial gradient
+uniform vec3 uDitherColor; // Flat color when gradient is off
+uniform vec3 uDitherGradientColorA; // Gradient start color
+uniform vec3 uDitherGradientColorB; // Gradient end color
+uniform float uDitherGradientAngle; // Gradient direction in radians
+uniform float uDitherGradientScale; // Gradient spread
+uniform float uDitherGradientOffsetX; // Gradient center X shift
+uniform float uDitherGradientOffsetY; // Gradient center Y shift
 uniform float uDistortionFrequency; // Frequency of sine wave distortion
 uniform float uDistortionAmplitude; // Amplitude of sine wave distortion
 uniform float uDistortionSpeed; // Speed of sine wave animation
 uniform float uDistortionAngle; // Angle of distortion in radians
+uniform float uPositionX;
+uniform float uPositionY;
+uniform float uPositionRotation;
 uniform float uRotation;
 uniform float uScale;
 uniform vec2 uUvScale;
@@ -188,7 +208,15 @@ void main() {
   // Center coordinates for rotation/scale
   vec2 centeredUv = distortedUv - 0.5;
 
-  // Apply rotation
+  // Apply position offset (positive X = video moves right, positive Y = video moves up)
+  centeredUv -= vec2(uPositionX, uPositionY);
+
+  // Apply position rotation (user-facing rotation of the video frame)
+  float cosPR = cos(uPositionRotation);
+  float sinPR = sin(uPositionRotation);
+  centeredUv = mat2(cosPR, -sinPR, sinPR, cosPR) * centeredUv;
+
+  // Apply distortion rotation
   float cosR = cos(uRotation);
   float sinR = sin(uRotation);
   mat2 rotationMatrix = mat2(cosR, -sinR, sinR, cosR);
@@ -227,8 +255,57 @@ void main() {
 
   vec2 coord = distortedUv * uResolution * uDitherScale;
   vec4 texColor = texture2D(tDiffuse, distortedUv);
-  
-  // ALWAYS apply tonal adjustments (even when dithering is disabled)
+
+  // Pre-shader gradient overlay: composited onto video before all processing
+  if (uGradientEnabled) {
+    float gt;
+    if (uGradientType == 0) {
+      // Linear gradient
+      vec2 gDir = vec2(cos(uGradientAngle), sin(uGradientAngle));
+      vec2 gCenter = vec2(0.5 + uGradientOffsetX, 0.5 + uGradientOffsetY);
+      gt = dot(vUv - gCenter, gDir) * uGradientScale + 0.5;
+    } else {
+      // Radial gradient
+      vec2 gCenter = vec2(0.5 + uGradientOffsetX, 0.5 + uGradientOffsetY);
+      gt = length(vUv - gCenter) * uGradientScale;
+    }
+    gt = clamp(gt, 0.0, 1.0);
+    vec3 gColor = mix(uGradientColorA, uGradientColorB, gt);
+    float pcAlpha = mix(uGradientOpacityA, uGradientOpacityB, gt);
+
+    // Blend modes
+    vec3 blended;
+    if (uGradientBlendMode == 0) {
+      // Normal: per-color opacity is standard alpha
+      blended = gColor;
+      texColor.rgb = mix(texColor.rgb, blended, pcAlpha * uGradientOpacity);
+    } else {
+      if (uGradientBlendMode == 1) {
+        blended = texColor.rgb * gColor;                                       // Multiply
+      } else if (uGradientBlendMode == 2) {
+        blended = 1.0 - (1.0 - texColor.rgb) * (1.0 - gColor);               // Screen
+      } else {
+        blended = mix(                                                         // Overlay
+          2.0 * texColor.rgb * gColor,
+          1.0 - 2.0 * (1.0 - texColor.rgb) * (1.0 - gColor),
+          step(0.5, texColor.rgb)
+        );
+      }
+      // Per-color opacity: 0 = pure blend-mode effect, 1 = direct gradient color.
+      // This ensures colors like white (which are invisible in multiply) can
+      // still show through when per-color opacity is raised.
+      blended = mix(blended, gColor, pcAlpha);
+      texColor.rgb = mix(texColor.rgb, blended, uGradientOpacity);
+    }
+  }
+
+  // Shader bypass: output raw video (+ gradient if enabled) with no further processing
+  if (!uShaderEnabled) {
+    gl_FragColor = vec4(texColor.rgb, 1.0);
+    return;
+  }
+
+  // Apply tonal adjustments
   vec3 toneColor = pow(texColor.rgb, vec3(2.2));
 
   // Exposure adjustment (applied early in linear space)
@@ -293,11 +370,15 @@ void main() {
     if (ditheredValue > 0.5) {
       alpha = 1.0;
 
-      // Choose color based on mode
-      if (uUseSingleColor) {
+      // Choose color: flat or spatial gradient
+      if (!uDitherGradient) {
         toneColor = uDitherColor;
       } else {
-        toneColor = uIsDarkMode ? uDarkModeColor : uLightModeColor;
+        vec2 gradDir = vec2(cos(uDitherGradientAngle), sin(uDitherGradientAngle));
+        vec2 gradCenter = vec2(0.5 + uDitherGradientOffsetX, 0.5 + uDitherGradientOffsetY);
+        float t = dot(vUv - gradCenter, gradDir) * uDitherGradientScale + 0.5;
+        t = clamp(t, 0.0, 1.0);
+        toneColor = mix(uDitherGradientColorA, uDitherGradientColorB, t);
       }
     } else {
       alpha = 0.0; // Dithered out pixels become transparent
@@ -315,6 +396,19 @@ void main() {
 export const dancingVideoShaderUniforms = {
   tDiffuse: { value: null },
   uResolution: { value: { x: 1920, y: 1080 } },
+  uGradientEnabled: { value: false },
+  uGradientType: { value: 0 },
+  uGradientColorA: { value: { x: 0, y: 0, z: 0 } },
+  uGradientOpacityA: { value: 1.0 },
+  uGradientColorB: { value: { x: 1, y: 1, z: 1 } },
+  uGradientOpacityB: { value: 1.0 },
+  uGradientOpacity: { value: 1.0 },
+  uGradientBlendMode: { value: 1 },
+  uGradientAngle: { value: 0.0 },
+  uGradientScale: { value: 1.0 },
+  uGradientOffsetX: { value: 0.0 },
+  uGradientOffsetY: { value: 0.0 },
+  uShaderEnabled: { value: true },
   uDitherScale: { value: 1.0 },
   uContrast: { value: 1.5 },
   uBrightness: { value: 1.0 },
@@ -332,16 +426,22 @@ export const dancingVideoShaderUniforms = {
   uThreshold: { value: 0.5 },
   uAlphaThreshold: { value: 0.7 }, // Threshold for bright pixels to become transparent
   uTime: { value: 0.0 },
-  uUseSingleColor: { value: false },
   uDitherEnabled: { value: true },
-  uDitherColor: { value: { x: 1.0, y: 1.0, z: 1.0 } }, // Default white
-  uLightModeColor: { value: { x: 0.0, y: 0.0, z: 0.0 } }, // Black for light mode
-  uDarkModeColor: { value: { x: 1.0, y: 1.0, z: 1.0 } }, // White for dark mode
-  uIsDarkMode: { value: false },
+  uDitherGradient: { value: true },
+  uDitherColor: { value: { x: 1.0, y: 1.0, z: 1.0 } },
+  uDitherGradientColorA: { value: { x: 0.34, y: 0.33, z: 1.0 } },
+  uDitherGradientColorB: { value: { x: 0.40, y: 0.43, z: 0.68 } },
+  uDitherGradientAngle: { value: 0.0 },
+  uDitherGradientScale: { value: 1.0 },
+  uDitherGradientOffsetX: { value: 0.0 },
+  uDitherGradientOffsetY: { value: 0.0 },
   uDistortionFrequency: { value: 20.0 }, // Frequency of sine wave distortion
   uDistortionAmplitude: { value: 0.02 }, // Amplitude of sine wave distortion
   uDistortionSpeed: { value: 2.0 }, // Speed of sine wave animation
   uDistortionAngle: { value: 0.0 }, // Angle of distortion in radians
+  uPositionX: { value: 0.0 },
+  uPositionY: { value: 0.0 },
+  uPositionRotation: { value: 0.0 },
   uRotation: { value: 0.0 },
   uScale: { value: 1.0 },
   uUvScale: { value: { x: 1.0, y: 1.0 } }

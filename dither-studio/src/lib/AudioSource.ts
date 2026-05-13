@@ -1,20 +1,11 @@
 /**
  * AudioSource
  *
- * - Wraps an HTMLAudioElement for live preview playback (driven by the user's
- *   transport: Play/Pause, Seek). Wires it to a Web Audio AnalyserNode so the
- *   render loop can read bands at the current playhead in real time.
- *
- * - Independently fetches the audio file once, decodes it to an AudioBuffer,
- *   and pre-computes deterministic per-frame band envelopes by running the
- *   buffer through low/band/high biquad filters in OfflineAudioContext. Used
- *   for frame-accurate, deterministic export.
- *
- * Bands returned are normalised 0..1 floats with attack/release smoothing
- * applied (see `getBands`). `getDeterministicBands(time)` returns the same
- * shape but read from the offline-rendered buffers — no smoothing applied
- * (the consumer can apply attack/release to match preview look if desired).
+ * Wraps an HTMLAudioElement for live preview playback — wired to a Web Audio
+ * AnalyserNode so the render loop can read frequency bands in real time.
+ * Offline envelope analysis is delegated to `audioEnvelope.ts`.
  */
+import { computeEnvelope, readEnvelopeBands } from './audioEnvelope';
 
 export interface AudioBands {
   rms: number;
@@ -231,72 +222,9 @@ export class AudioSource {
   /** Fetch + decode + pre-compute filtered envelopes for deterministic export. */
   async preloadEnvelope(): Promise<void> {
     if (this.envelope) return;
-    const Ctx = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
-    const tmpCtx = new Ctx();
-    try {
-      const res = await fetch(this.url);
-      if (!res.ok) throw new Error(`Failed to fetch audio: ${res.status}`);
-      const buf = await res.arrayBuffer();
-      const audioBuffer = await tmpCtx.decodeAudioData(buf.slice(0));
-      this.buffer = audioBuffer;
-
-      const sr = audioBuffer.sampleRate;
-      const Offline = (window as any).OfflineAudioContext as typeof OfflineAudioContext;
-
-      // Render three filtered copies in parallel
-      const renderFiltered = (type: BiquadFilterType, freq: number, q: number) =>
-        new Promise<AudioBuffer>((resolve) => {
-          const off = new Offline(1, audioBuffer.length, sr);
-          const src = off.createBufferSource();
-          src.buffer = audioBuffer;
-          const filter = off.createBiquadFilter();
-          filter.type = type;
-          filter.frequency.value = freq;
-          filter.Q.value = q;
-          src.connect(filter);
-          filter.connect(off.destination);
-          src.start();
-          off.startRendering().then(resolve);
-        });
-
-      const [low, mid, high] = await Promise.all([
-        renderFiltered('lowpass', 250, 0.7),
-        renderFiltered('bandpass', 1000, 0.7),
-        renderFiltered('highpass', 4000, 0.7),
-      ]);
-
-      // Build envelope at envelopeRate Hz: per channel, RMS over a window
-      const totalSec = audioBuffer.duration;
-      const frames = Math.ceil(totalSec * this.envelopeRate);
-      const env = new Float32Array(frames * 4);
-      const windowSize = Math.max(1, Math.floor(sr / this.envelopeRate));
-      const fullData = audioBuffer.getChannelData(0);
-      const lowData = low.getChannelData(0);
-      const midData = mid.getChannelData(0);
-      const highData = high.getChannelData(0);
-
-      // First pass: raw RMS per band
-      let max = 1e-6;
-      for (let i = 0; i < frames; i++) {
-        const start = Math.floor(i * sr / this.envelopeRate);
-        const end = Math.min(fullData.length, start + windowSize);
-        const rms = rmsRange(fullData, start, end);
-        const lo = rmsRange(lowData, start, end);
-        const md = rmsRange(midData, start, end);
-        const hi = rmsRange(highData, start, end);
-        env[i * 4 + 0] = rms;
-        env[i * 4 + 1] = lo;
-        env[i * 4 + 2] = md;
-        env[i * 4 + 3] = hi;
-        if (rms > max) max = rms;
-      }
-      // Normalise to peak so 1.0 = loudest moment in the file.
-      const inv = 1 / max;
-      for (let i = 0; i < env.length; i++) env[i] = Math.min(1, env[i] * inv);
-      this.envelope = env;
-    } finally {
-      tmpCtx.close().catch(() => {});
-    }
+    const result = await computeEnvelope(this.url, this.envelopeRate);
+    this.buffer = result.buffer;
+    this.envelope = result.envelope;
   }
 
   /**
@@ -304,15 +232,7 @@ export class AudioSource {
    * hasn't been computed yet (no preloadEnvelope call).
    */
   getDeterministicBands(timeSec: number): AudioBands {
-    const env = this.envelope;
-    if (!env) return { rms: 0, low: 0, mid: 0, high: 0 };
-    const i = Math.max(0, Math.min(env.length / 4 - 1, Math.floor(timeSec * this.envelopeRate)));
-    return {
-      rms: env[i * 4 + 0],
-      low: env[i * 4 + 1],
-      mid: env[i * 4 + 2],
-      high: env[i * 4 + 3],
-    };
+    return readEnvelopeBands(this.envelope, this.envelopeRate, timeSec);
   }
 
   /** Clear smoothing state — call when seeking or starting export. */
@@ -342,11 +262,4 @@ export class AudioSource {
     this.buffer = null;
     this.envelope = null;
   }
-}
-
-function rmsRange(data: Float32Array, start: number, end: number): number {
-  let s = 0;
-  const n = Math.max(1, end - start);
-  for (let i = start; i < end; i++) s += data[i] * data[i];
-  return Math.sqrt(s / n);
 }

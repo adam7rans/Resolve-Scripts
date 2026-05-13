@@ -1,0 +1,319 @@
+import { Router } from 'express';
+import multer from 'multer';
+import * as fs from 'fs';
+import * as path from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import {
+  SERVER_DIR, projectDir, exportDir, slugify, safePngFilename,
+  readProject, writeProject, readSettings,
+} from '../helpers.js';
+
+const execAsync = promisify(exec);
+
+export const exportRoutes = Router();
+
+// ── stitchVideo ───────────────────────────────────────────────────────────────
+
+/**
+ * Stitch PNG sequence into an MP4 using FFMPEG.
+ * Includes project audio/video-audio and backing music if available.
+ */
+async function stitchVideo(projectId: string, exportId: string) {
+  const proj = readProject(projectId);
+  if (!proj) return null;
+  const settings = readSettings(projectId, proj);
+  const dir = exportDir(projectId, exportId);
+  const manifestPath = path.join(dir, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) return null;
+
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  const prefix = (manifest.prefix || '').trim();
+  const { fps, startTime, duration } = manifest;
+  // `keptSegments`, when present, lists the source-relative time windows that
+  // should be concatenated together for the audio (used by the jump-cut /
+  // skip-silence feature). When absent, audio is taken as one slice via -ss/-t.
+  const keptSegments: Array<{ srcStart: number; srcEnd: number }> =
+    Array.isArray(manifest.keptSegments) ? manifest.keptSegments : [];
+  const hasKeptSegments = keptSegments.length > 0;
+
+  // When the background layer was OFF for the export, the PNG sequence has
+  // an alpha channel. libx264/yuv420p (the .mp4 path) cannot preserve alpha
+  // and would flatten transparent areas to black. Emit a ProRes 4444 .mov
+  // instead, which Resolve and other NLEs accept as an alpha-capable video.
+  const wantAlpha = manifest?.layers?.background === false;
+  const ext = wantAlpha ? 'mov' : 'mp4';
+  // Output filename: use trimmed prefix (or project name)
+  const outName = prefix || proj.name?.trim() || 'video';
+  const outPath = path.join(dir, `${outName}.${ext}`);
+  // Input pattern: normalize multiple spaces to single dash, then convert remaining spaces to dashes
+  // (frontend converts spaces when saving PNGs)
+  const inputPrefix = prefix.replace(/ +/g, '-').replace(/ /g, '-');
+  const pattern = path.join(dir, `${inputPrefix ? inputPrefix + '_' : '_'}%05d.png`);
+
+  // Build FFMPEG command
+  // Input 0: PNG sequence
+  let inputs = `-framerate ${fps} -i "${pattern}"`;
+  let filterComplex = '';
+  let audioMap = '';
+
+  const audioSources: { path: string; volume: number; isOutro?: boolean }[] = [];
+  const pDir = projectDir(projectId);
+
+  // Source 1: Main audio (from video or audio file)
+  const mainAudioFile = proj.audioFile || proj.videoFile;
+  if (mainAudioFile && fs.existsSync(path.join(pDir, mainAudioFile))) {
+    const vol = typeof settings?.ui?.mediaVolume === 'number' ? settings.ui.mediaVolume : 1;
+    audioSources.push({ path: path.join(pDir, mainAudioFile), volume: vol });
+  }
+
+  // Source 2: Backing music
+  if (proj.musicFile) {
+    const musicPath = path.join(pDir, proj.musicFile);
+    const exists = fs.existsSync(musicPath);
+    const musicVol = typeof settings?.music?.volume === 'number' ? settings.music.volume : 0.5;
+    const musicLayerOn = settings?.layers?.music !== false;
+
+    if (exists && musicLayerOn) {
+      audioSources.push({ path: musicPath, volume: musicVol });
+    }
+  }
+
+  // Source 3: Outro sound
+  const outroDuration = manifest.outroDuration || 0;
+  if (outroDuration > 0) {
+    const outroPath = path.resolve(SERVER_DIR, '../audio/bassnoise.wav');
+    if (fs.existsSync(outroPath)) {
+      const outroVol = typeof settings?.ui?.outroVolume === 'number' ? settings.ui.outroVolume : 0.5;
+      audioSources.push({ path: outroPath, volume: outroVol, isOutro: true });
+    }
+  }
+
+  if (audioSources.length > 0) {
+    audioSources.forEach((src, i) => {
+      const isMusic = i > 0 && !src.isOutro;
+      const isOutro = src.isOutro;
+      const isMain = i === 0 && !src.isOutro;
+      const loopStr = isMusic ? '-stream_loop -1 ' : '';
+      const ssStr = (isOutro || isMusic) ? ''
+                  : (isMain && hasKeptSegments) ? ''
+                  : `-ss ${startTime || 0} `;
+      const tStr = (isMain && hasKeptSegments) ? '' : `-t ${duration || 0} `;
+      inputs += ` ${loopStr}${ssStr}${tStr}-i "${src.path}"`;
+    });
+
+    const sc = settings?.music?.sidechain;
+    const scEnabled = sc?.enabled !== false;
+    const threshold = sc?.threshold ?? 0.1;
+    const ratio = 1.0 / (1.0 - (sc?.amount ?? 0.5));
+    const attack = sc?.attackMs ?? 80;
+    const release = sc?.releaseMs ?? 350;
+
+    const lim = settings?.limiter;
+    const limEnabled = lim?.enabled !== false;
+    const limIn = limEnabled ? Math.pow(10, (lim?.inputGainDb ?? 0) / 20) : 1;
+    const limThresh = limEnabled ? Math.max(0.063, Math.pow(10, (lim?.thresholdDb ?? -6) / 20)) : 1;
+    const limOut = limEnabled ? Math.pow(10, (lim?.outputGainDb ?? 0) / 20) : 1;
+    const limRelease = lim?.releaseSec ?? 0.25;
+
+    let filter = '';
+
+    audioSources.forEach((src, i) => {
+      const idx = i + 1;
+      if (i === 0) {
+        const n = keptSegments.length;
+        let mainLabel = `[${idx}:a]`;
+        if (hasKeptSegments) {
+          const splitOuts: string[] = [];
+          for (let j = 0; j < n; j++) splitOuts.push(`[m_src_${j}]`);
+          filter += `${mainLabel}asplit=${n}${splitOuts.join('')};`;
+          const concatIns: string[] = [];
+          for (let j = 0; j < n; j++) {
+            const seg = keptSegments[j];
+            filter += `[m_src_${j}]atrim=start=${seg.srcStart.toFixed(3)}:end=${seg.srcEnd.toFixed(3)},asetpts=PTS-STARTPTS[m_seg_${j}];`;
+            concatIns.push(`[m_seg_${j}]`);
+          }
+          filter += `${concatIns.join('')}concat=n=${n}:v=0:a=1[main_edited];`;
+          mainLabel = `[main_edited]`;
+        }
+        filter += `${mainLabel}volume=${(src.volume * limIn).toFixed(2)}`;
+        if (limEnabled) {
+          filter += `,alimiter=level_in=1:level_out=1:limit=${limThresh.toFixed(3)}:attack=5:release=${(limRelease * 1000).toFixed(0)}`;
+        }
+        filter += `,volume=${limOut.toFixed(2)},apad=whole_dur=${duration.toFixed(3)},asplit=2[speech_trigger][speech_mix];`;
+      } else if (src.isOutro) {
+        const delayMs = Math.round((manifest.baseDuration || 0) * 1000);
+        filter += `[${idx}:a]volume=${src.volume.toFixed(2)},adelay=${delayMs}|${delayMs}[outro_mix];`;
+      } else {
+        filter += `[${idx}:a]volume=${src.volume.toFixed(2)}[music_pre];`;
+        if (scEnabled) {
+          filter += `[music_pre][speech_trigger]sidechaincompress=threshold=${threshold}:ratio=${ratio.toFixed(2)}:attack=${attack}:release=${release}[music_mix];`;
+        } else {
+          filter += `[music_pre]anull[music_mix];`;
+        }
+      }
+    });
+
+    const mixLabels = [];
+    if (audioSources.find(s => !s.isOutro && audioSources.indexOf(s) === 0)) mixLabels.push('[speech_mix]');
+    if (audioSources.find(s => !s.isOutro && audioSources.indexOf(s) > 0)) mixLabels.push('[music_mix]');
+    if (audioSources.find(s => s.isOutro)) mixLabels.push('[outro_mix]');
+
+    filter += `${mixLabels.join('')}amix=inputs=${mixLabels.length}:dropout_transition=0`;
+    filter += `,volume=${mixLabels.length},alimiter=limit=0.9[aout]`;
+
+    filterComplex = ` -filter_complex "${filter}"`;
+    audioMap = '-map 0:v -map "[aout]"';
+  } else {
+    audioMap = '-map 0:v';
+  }
+
+  const videoCodec = wantAlpha
+    ? '-c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le -alpha_bits 16 -vendor apl0'
+    : '-c:v libx264 -crf 18 -pix_fmt yuv420p';
+  const audioCodec = wantAlpha ? '-c:a pcm_s16le' : '-c:a aac -b:a 192k';
+  // NOTE: exec is used here intentionally — the ffmpeg command requires shell
+  // features (complex filter_complex quoting). All inputs are server-controlled
+  // paths and numeric values, not user-supplied strings.
+  const cmd = `ffmpeg -y ${inputs}${filterComplex} ${audioMap} ${videoCodec} ${audioCodec} "${outPath}"`;
+
+  console.log(`[export] Stitching video (alpha=${wantAlpha}): ${cmd}`);
+  try {
+    await execAsync(cmd);
+    console.log(`[export] Video stitched successfully: ${outPath}`);
+    return `${prefix || 'video'}.${ext}`;
+  } catch (err) {
+    console.error(`[export] FFMPEG failed:`, err);
+    throw err;
+  }
+}
+
+// ── routes ────────────────────────────────────────────────────────────────────
+
+// Create export session
+exportRoutes.post('/:id/exports', (req, res) => {
+  const id = req.params.id;
+  const proj = readProject(id);
+  if (!proj) return void res.status(404).json({ error: 'Not found' });
+
+  const prefix = slugify(String(req.body?.prefix || 'export'));
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const exportId = slugify(`${stamp}-${prefix}`);
+  const dir = exportDir(id, exportId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+    status: 'exporting',
+    createdAt: new Date().toISOString(),
+    ...req.body,
+  }, null, 2));
+  res.json({ ok: true, exportId, folder: `projects/${id}/exports/${exportId}` });
+});
+
+const frameUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 128 * 1024 * 1024 },
+});
+
+// Upload a single PNG frame
+exportRoutes.post('/:id/exports/:exportId/frame', frameUpload.single('frame'), (req, res) => {
+  const id = req.params.id as string;
+  const proj = readProject(id);
+  if (!proj || !req.file) {
+    res.status(400).json({ error: 'Bad request' });
+    return;
+  }
+
+  const eid = slugify(req.params.exportId as string);
+  const dir = exportDir(id, eid);
+  if (!fs.existsSync(dir)) {
+    res.status(404).json({ error: 'Export folder not found' });
+    return;
+  }
+
+  const filename = safePngFilename(String(req.body?.filename || req.file.originalname || 'frame.png'));
+  fs.writeFileSync(path.join(dir, filename), req.file.buffer);
+  res.json({ ok: true, filename });
+});
+
+// Finish export — stitch video with FFMPEG
+exportRoutes.post('/:id/exports/:exportId/finish', async (req, res) => {
+  const id = req.params.id as string;
+  const proj = readProject(id);
+  if (!proj) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+
+  const eid = slugify(req.params.exportId as string);
+  const dir = exportDir(id, eid);
+  if (!fs.existsSync(dir)) {
+    res.status(404).json({ error: 'Export folder not found' });
+    return;
+  }
+
+  const manifestPath = path.join(dir, 'manifest.json');
+  const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) : {};
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    ...manifest,
+    status: 'complete',
+    completedAt: new Date().toISOString(),
+  }, null, 2));
+
+  let videoFile = null;
+  let stitchError = null;
+  try {
+    videoFile = await stitchVideo(id, eid);
+    if (videoFile) {
+      const updatedManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      fs.writeFileSync(manifestPath, JSON.stringify({
+        ...updatedManifest,
+        videoFile,
+      }, null, 2));
+    }
+  } catch (err) {
+    console.error('Stitching failed', err);
+    stitchError = err instanceof Error ? err.message : String(err);
+    const logPath = path.join(dir, 'stitch-error.log');
+    fs.writeFileSync(logPath, `${new Date().toISOString()}\n${stitchError}\n\n`);
+  }
+
+  if (stitchError) {
+    res.json({ ok: false, error: `Video stitching failed: ${stitchError}`, folder: `projects/${id}/exports/${eid}` });
+    return;
+  }
+
+  proj.updatedAt = new Date().toISOString();
+  writeProject(id, proj);
+  res.json({ ok: true, folder: `projects/${id}/exports/${eid}`, videoFile });
+});
+
+// Open a local folder in the OS file explorer
+exportRoutes.post('/:id/exports/:exportId/open', (req, res) => {
+  const id = req.params.id as string;
+  const eid = req.params.exportId as string;
+  const dir = path.resolve(exportDir(id, eid));
+
+  console.log(`[shell] Open request for project=${id} export=${eid}`);
+  console.log(`[shell] Resolved directory: ${dir}`);
+
+  if (!fs.existsSync(dir)) {
+    console.error(`[shell] Directory does not exist: ${dir}`);
+    res.status(404).json({ error: 'Folder not found' });
+    return;
+  }
+
+  const platform = process.platform;
+  // NOTE: exec is used intentionally — `open`/`xdg-open` need shell resolution,
+  // and `dir` is a server-controlled path derived from the project directory.
+  const openCmd = platform === 'win32' ? `start ""` : platform === 'darwin' ? 'open' : 'xdg-open';
+
+  console.log(`[shell] Executing: ${openCmd} "${dir}"`);
+  exec(`${openCmd} "${dir}"`, (err) => {
+    if (err) {
+      console.error('[shell] Failed to open folder:', err);
+      res.status(500).json({ error: 'Failed to open folder' });
+      return;
+    }
+    res.json({ ok: true });
+  });
+});

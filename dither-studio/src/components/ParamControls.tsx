@@ -71,6 +71,43 @@ export const BackgroundControls: React.FC<{ value: BackgroundParams; onChange: (
 
 const RAD_PER_DEG = Math.PI / 180;
 
+const GRADIENT_TYPE_OPTIONS = [
+  { label: 'linear', value: 0 },
+  { label: 'radial', value: 1 },
+];
+
+const BLEND_MODE_OPTIONS = [
+  { label: 'normal', value: 0 },
+  { label: 'multiply', value: 1 },
+  { label: 'screen', value: 2 },
+  { label: 'overlay', value: 3 },
+];
+
+export const VideoGradientSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
+  const set = (patch: Partial<VideoShaderParams>) => onChange({ ...value, ...patch });
+  return (
+    <Section title="Gradient" onReset={onReset} enabled={value.gradientEnabled} onToggle={(v) => set({ gradientEnabled: v })}>
+      {value.gradientEnabled && (
+        <>
+          <Select label="type" value={value.gradientType} options={GRADIENT_TYPE_OPTIONS} onChange={(v) => set({ gradientType: parseInt(v, 10) })} />
+          <Select label="blend" value={value.gradientBlendMode} options={BLEND_MODE_OPTIONS} onChange={(v) => set({ gradientBlendMode: parseInt(v, 10) })} />
+          <ColorInput label="color A" value={value.gradientColorA} onChange={(v) => set({ gradientColorA: v })} />
+          <Slider label="opacity A" value={value.gradientOpacityA} min={0} max={1} step={0.01} onChange={(v) => set({ gradientOpacityA: v })} />
+          <ColorInput label="color B" value={value.gradientColorB} onChange={(v) => set({ gradientColorB: v })} />
+          <Slider label="opacity B" value={value.gradientOpacityB} min={0} max={1} step={0.01} onChange={(v) => set({ gradientOpacityB: v })} />
+          <Slider label="opacity" value={value.gradientOpacity} min={0} max={1} step={0.01} onChange={(v) => set({ gradientOpacity: v })} />
+          {value.gradientType === 0 && (
+            <Slider label="angle" value={value.gradientAngle / RAD_PER_DEG} min={0} max={360} step={1} onChange={(v) => set({ gradientAngle: v * RAD_PER_DEG })} />
+          )}
+          <Slider label="spread" value={value.gradientScale} min={0.1} max={5} step={0.05} onChange={(v) => set({ gradientScale: v })} />
+          <Slider label="offset X" value={value.gradientOffsetX} min={-1} max={1} step={0.01} onChange={(v) => set({ gradientOffsetX: v })} />
+          <Slider label="offset Y" value={value.gradientOffsetY} min={-1} max={1} step={0.01} onChange={(v) => set({ gradientOffsetY: v })} />
+        </>
+      )}
+    </Section>
+  );
+};
+
 export const VideoLevelsSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
   const set = (patch: Partial<VideoShaderParams>) => onChange({ ...value, ...patch });
   return (
@@ -102,6 +139,22 @@ export const VideoColorSection: React.FC<{ value: VideoShaderParams; onChange: (
       <Slider label="gamma" value={value.gamma} min={0.2} max={3} step={0.01} onChange={(v) => set({ gamma: v })} />
       <Slider label="saturation" value={value.saturation} min={0} max={3} step={0.01} onChange={(v) => set({ saturation: v })} />
       <Slider label="clarity" value={value.clarity} min={-1} max={1} step={0.01} onChange={(v) => set({ clarity: v })} />
+    </Section>
+  );
+};
+
+export const VideoPositionSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
+  const set = (patch: Partial<VideoShaderParams>) => onChange({ ...value, ...patch });
+  return (
+    <Section title="Position" onReset={onReset}>
+      <Slider label="horizontal" value={value.positionX} min={-1} max={1} step={0.005} onChange={(v) => set({ positionX: v })} />
+      <Slider label="vertical" value={value.positionY} min={-1} max={1} step={0.005} onChange={(v) => set({ positionY: v })} />
+      <Slider
+        label="rotation"
+        value={value.positionRotation / RAD_PER_DEG}
+        min={0} max={360} step={0.5}
+        onChange={(v) => set({ positionRotation: v * RAD_PER_DEG })}
+      />
     </Section>
   );
 };
@@ -139,11 +192,49 @@ export const VideoDitherSection: React.FC<{ value: VideoShaderParams; onChange: 
       <Slider label="scale" value={value.ditherScale} min={0.1} max={8} step={0.05} onChange={(v) => set({ ditherScale: v })} />
       <Slider label="threshold" value={value.threshold} min={0} max={1} step={0.01} onChange={(v) => set({ threshold: v })} />
       <Slider label="alpha thresh" value={value.alphaThreshold} min={0} max={1} step={0.01} onChange={(v) => set({ alphaThreshold: v })} />
-      <Toggle label="single color" value={value.useSingleColor} onChange={(v) => set({ useSingleColor: v })} />
-      <Toggle label="dark mode" value={value.isDarkMode} onChange={(v) => set({ isDarkMode: v })} />
-      <ColorInput label="dither color" value={value.ditherColor} onChange={(v) => set({ ditherColor: v })} />
-      <ColorInput label="light color" value={value.lightModeColor} onChange={(v) => set({ lightModeColor: v })} />
-      <ColorInput label="dark color" value={value.darkModeColor} onChange={(v) => set({ darkModeColor: v })} />
+      {/* color mode toggle */}
+      <div style={{ display: 'flex', gap: 4, margin: '8px 0 6px' }}>
+        <button
+          onClick={() => set({ ditherGradient: false })}
+          style={{
+            flex: 1, padding: '4px 0', border: '1px solid #333', borderRadius: 3,
+            background: !value.ditherGradient ? '#1f6feb' : 'transparent',
+            color: !value.ditherGradient ? '#fff' : '#888',
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5,
+          }}
+        >
+          Single Color
+        </button>
+        <button
+          onClick={() => set({ ditherGradient: true })}
+          style={{
+            flex: 1, padding: '4px 0', border: '1px solid #333', borderRadius: 3,
+            background: value.ditherGradient ? '#1f6feb' : 'transparent',
+            color: value.ditherGradient ? '#fff' : '#888',
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5,
+          }}
+        >
+          Gradient
+        </button>
+      </div>
+      {!value.ditherGradient && (
+        <ColorInput label="color" value={value.ditherColor} onChange={(v) => set({ ditherColor: v })} />
+      )}
+      {value.ditherGradient && (
+        <>
+          <ColorInput label="color A" value={value.ditherGradientColorA} onChange={(v) => set({ ditherGradientColorA: v })} />
+          <ColorInput label="color B" value={value.ditherGradientColorB} onChange={(v) => set({ ditherGradientColorB: v })} />
+          <Slider
+            label="angle"
+            value={value.ditherGradientAngle / RAD_PER_DEG}
+            min={0} max={360} step={1}
+            onChange={(v) => set({ ditherGradientAngle: v * RAD_PER_DEG })}
+          />
+          <Slider label="spread" value={value.ditherGradientScale} min={0.1} max={5} step={0.05} onChange={(v) => set({ ditherGradientScale: v })} />
+          <Slider label="offset X" value={value.ditherGradientOffsetX} min={-1} max={1} step={0.01} onChange={(v) => set({ ditherGradientOffsetX: v })} />
+          <Slider label="offset Y" value={value.ditherGradientOffsetY} min={-1} max={1} step={0.01} onChange={(v) => set({ ditherGradientOffsetY: v })} />
+        </>
+      )}
     </Section>
   );
 };

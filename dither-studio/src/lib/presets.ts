@@ -108,6 +108,19 @@ export interface VideoPreset {
 }
 
 const baseVideoDefaults = {
+  gradientEnabled: false,
+  gradientType: 0,
+  gradientColorA: '#000000',
+  gradientOpacityA: 1,
+  gradientColorB: '#ffffff',
+  gradientOpacityB: 1,
+  gradientOpacity: 1,
+  gradientBlendMode: 1,
+  gradientAngle: 0,
+  gradientScale: 1,
+  gradientOffsetX: 0,
+  gradientOffsetY: 0,
+  shaderEnabled: true,
   blackPoint: 0.0,
   whitePoint: 1.0,
   shadows: 0.0,
@@ -117,13 +130,19 @@ const baseVideoDefaults = {
   gamma: 1.0,
   saturation: 1.0,
   clarity: 0.0,
+  positionX: 0,
+  positionY: 0,
+  positionRotation: 0,
   rotation: 0.0,
   scale: 1.0,
-  useSingleColor: false,
-  isDarkMode: true,
+  ditherGradient: true,
   ditherColor: '#ffffff',
-  lightModeColor: '#5754ff', // [0.34, 0.33, 1]
-  darkModeColor: '#666eae',  // [0.40, 0.43, 0.68]
+  ditherGradientColorA: '#5754ff',
+  ditherGradientColorB: '#666eae',
+  ditherGradientAngle: 0,
+  ditherGradientScale: 1,
+  ditherGradientOffsetX: 0,
+  ditherGradientOffsetY: 0,
 };
 
 export const VIDEO_PRESETS: VideoPreset[] = [

@@ -16,6 +16,21 @@ export interface DitherParams {
 // All uniforms of src/shaders/videoShader.ts (dancingVideoShader on the site).
 // This single shader does levels/tone/color/distortion/dither in one pass.
 export interface VideoShaderParams {
+  // pre-shader gradient overlay (composited onto video before all processing)
+  gradientEnabled: boolean;
+  gradientType: number;              // 0 = linear, 1 = radial
+  gradientColorA: string;            // hex
+  gradientOpacityA: number;          // per-color opacity for A (0..1)
+  gradientColorB: string;            // hex
+  gradientOpacityB: number;          // per-color opacity for B (0..1)
+  gradientOpacity: number;           // master blend strength 0..1
+  gradientBlendMode: number;         // 0 = normal, 1 = multiply, 2 = screen, 3 = overlay
+  gradientAngle: number;             // direction in radians (linear only)
+  gradientScale: number;             // spread
+  gradientOffsetX: number;           // center shift (-1..1)
+  gradientOffsetY: number;           // center shift (-1..1)
+  // shader bypass (when false, only gradient + position apply — no levels/tone/color/dither)
+  shaderEnabled: boolean;
   // levels
   blackPoint: number;
   whitePoint: number;
@@ -30,6 +45,10 @@ export interface VideoShaderParams {
   gamma: number;
   saturation: number;
   clarity: number;
+  // position
+  positionX: number;         // horizontal offset in UV (-1..1)
+  positionY: number;         // vertical offset in UV (-1..1)
+  positionRotation: number;  // rotation in radians (0..2π)
   // distortion (UV)
   rotation: number;          // radians
   scale: number;             // uniform scale
@@ -43,11 +62,14 @@ export interface VideoShaderParams {
   ditherScale: number;
   threshold: number;
   alphaThreshold: number;
-  useSingleColor: boolean;
-  isDarkMode: boolean;
-  ditherColor: string;       // hex (used when useSingleColor)
-  lightModeColor: string;    // hex (used when !useSingleColor && !isDarkMode)
-  darkModeColor: string;     // hex (used when !useSingleColor && isDarkMode)
+  ditherGradient: boolean;          // false = single flat color, true = spatial gradient
+  ditherColor: string;              // hex — flat color when ditherGradient is false
+  ditherGradientColorA: string;     // hex — gradient start
+  ditherGradientColorB: string;     // hex — gradient end
+  ditherGradientAngle: number;      // gradient direction in radians
+  ditherGradientScale: number;      // gradient spread (higher = tighter)
+  ditherGradientOffsetX: number;    // gradient center horizontal shift (-1..1)
+  ditherGradientOffsetY: number;    // gradient center vertical shift (-1..1)
 }
 
 export interface BackgroundParams {
@@ -177,6 +199,19 @@ export const DEFAULT_DITHER: DitherParams = {
 // w3rk17/src/components/audio-transcript/DitherModeSelector.tsx
 // (the preset the talking video uses on the live site).
 export const DEFAULT_VIDEO: VideoShaderParams = {
+  gradientEnabled: false,
+  gradientType: 0,
+  gradientColorA: '#000000',
+  gradientOpacityA: 1,
+  gradientColorB: '#ffffff',
+  gradientOpacityB: 1,
+  gradientOpacity: 1,
+  gradientBlendMode: 1,    // multiply
+  gradientAngle: 0,
+  gradientScale: 1,
+  gradientOffsetX: 0,
+  gradientOffsetY: 0,
+  shaderEnabled: true,
   blackPoint: 0.0,
   whitePoint: 1.0,
   brightness: 0.8,
@@ -188,6 +223,9 @@ export const DEFAULT_VIDEO: VideoShaderParams = {
   gamma: 1.0,
   saturation: 1.0,
   clarity: 0.0,
+  positionX: 0,
+  positionY: 0,
+  positionRotation: 0,
   rotation: 0.0,
   scale: 1.0,
   distortionFrequency: 82,
@@ -199,11 +237,29 @@ export const DEFAULT_VIDEO: VideoShaderParams = {
   ditherScale: 1.1,
   threshold: 1,
   alphaThreshold: 0.95,
-  useSingleColor: false,
-  isDarkMode: true,
+  ditherGradient: true,
   ditherColor: '#ffffff',
-  lightModeColor: '#5754ff', // [0.34, 0.33, 1]
-  darkModeColor: '#666eae',  // [0.40, 0.43, 0.68]
+  ditherGradientColorA: '#5754ff',
+  ditherGradientColorB: '#666eae',
+  ditherGradientAngle: 0,
+  ditherGradientScale: 1,
+  ditherGradientOffsetX: 0,
+  ditherGradientOffsetY: 0,
+};
+
+export const DEFAULT_VIDEO_GRADIENT: Partial<VideoShaderParams> = {
+  gradientEnabled: DEFAULT_VIDEO.gradientEnabled,
+  gradientType: DEFAULT_VIDEO.gradientType,
+  gradientColorA: DEFAULT_VIDEO.gradientColorA,
+  gradientOpacityA: DEFAULT_VIDEO.gradientOpacityA,
+  gradientColorB: DEFAULT_VIDEO.gradientColorB,
+  gradientOpacityB: DEFAULT_VIDEO.gradientOpacityB,
+  gradientOpacity: DEFAULT_VIDEO.gradientOpacity,
+  gradientBlendMode: DEFAULT_VIDEO.gradientBlendMode,
+  gradientAngle: DEFAULT_VIDEO.gradientAngle,
+  gradientScale: DEFAULT_VIDEO.gradientScale,
+  gradientOffsetX: DEFAULT_VIDEO.gradientOffsetX,
+  gradientOffsetY: DEFAULT_VIDEO.gradientOffsetY,
 };
 
 export const DEFAULT_VIDEO_LEVELS: Partial<VideoShaderParams> = {
@@ -226,6 +282,12 @@ export const DEFAULT_VIDEO_COLOR: Partial<VideoShaderParams> = {
   clarity: DEFAULT_VIDEO.clarity,
 };
 
+export const DEFAULT_VIDEO_POSITION: Partial<VideoShaderParams> = {
+  positionX: DEFAULT_VIDEO.positionX,
+  positionY: DEFAULT_VIDEO.positionY,
+  positionRotation: DEFAULT_VIDEO.positionRotation,
+};
+
 export const DEFAULT_VIDEO_DISTORTION: Partial<VideoShaderParams> = {
   rotation: DEFAULT_VIDEO.rotation,
   scale: DEFAULT_VIDEO.scale,
@@ -241,11 +303,14 @@ export const DEFAULT_VIDEO_DITHER: Partial<VideoShaderParams> = {
   ditherScale: DEFAULT_VIDEO.ditherScale,
   threshold: DEFAULT_VIDEO.threshold,
   alphaThreshold: DEFAULT_VIDEO.alphaThreshold,
-  useSingleColor: DEFAULT_VIDEO.useSingleColor,
-  isDarkMode: DEFAULT_VIDEO.isDarkMode,
+  ditherGradient: DEFAULT_VIDEO.ditherGradient,
   ditherColor: DEFAULT_VIDEO.ditherColor,
-  lightModeColor: DEFAULT_VIDEO.lightModeColor,
-  darkModeColor: DEFAULT_VIDEO.darkModeColor,
+  ditherGradientColorA: DEFAULT_VIDEO.ditherGradientColorA,
+  ditherGradientColorB: DEFAULT_VIDEO.ditherGradientColorB,
+  ditherGradientAngle: DEFAULT_VIDEO.ditherGradientAngle,
+  ditherGradientScale: DEFAULT_VIDEO.ditherGradientScale,
+  ditherGradientOffsetX: DEFAULT_VIDEO.ditherGradientOffsetX,
+  ditherGradientOffsetY: DEFAULT_VIDEO.ditherGradientOffsetY,
 };
 
 export interface MicroTimeline {
