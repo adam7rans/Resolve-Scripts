@@ -102,8 +102,12 @@ export function useRenderLoop(
         }
         if (videoLayerOnRef.current && videoRendererRef.current) {
           const { end, outroDuration } = resolveExportRange(activeExportParamsRef.current, timelineDurationRef.current);
-          const tVideo = (outroDuration > 0 && playheadRef.current > end) ? end : undefined;
-          videoRendererRef.current.renderFrame(t, tVideo);
+          const frozenVideoTime = (outroDuration > 0 && playheadRef.current > end) ? end : undefined;
+          // Lock shader animation to the timeline/playhead instead of wall-clock
+          // time so paused previews, scrubbing, and exports all show the same
+          // distortion phase for the same source moment.
+          const visualTime = frozenVideoTime ?? playheadRef.current;
+          videoRendererRef.current.renderFrame(visualTime, frozenVideoTime);
         }
 
         const player = musicPlayerRef.current;

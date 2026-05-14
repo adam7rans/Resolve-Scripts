@@ -16,8 +16,24 @@ export type TranscriptUtterance = {
   words?: TranscriptWord[];
 };
 
+export type TranscriptChapter = {
+  headline: string;
+  gist: string;
+  summary: string;
+  start: number;
+  end: number;
+  text?: string;
+};
+
 export type TranscriptData = {
   speakers?: string[];
+  text?: string;
+  chapterSource?: string;
+  chapterConfig?: {
+    paragraphsPerChapter?: number;
+    model?: string;
+  };
+  chapters?: TranscriptChapter[];
   utterances: TranscriptUtterance[];
 };
 
@@ -53,7 +69,42 @@ export function parseTranscript(raw: unknown): TranscriptData {
     };
   });
 
-  return { utterances };
+  const speakers = Array.isArray(rawSource?.speakers)
+    ? rawSource.speakers.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0)
+    : undefined;
+
+  const chapters: TranscriptChapter[] | undefined = Array.isArray(rawSource?.chapters)
+    ? rawSource.chapters.map((entry: any) => {
+        const start = typeof entry?.start === 'number' ? entry.start : 0;
+        const end = typeof entry?.end === 'number' ? entry.end : start;
+        return {
+          headline: typeof entry?.headline === 'string' ? entry.headline : '',
+          gist: typeof entry?.gist === 'string' ? entry.gist : '',
+          summary: typeof entry?.summary === 'string' ? entry.summary : '',
+          start,
+          end,
+          text: typeof entry?.text === 'string' ? entry.text : undefined,
+        };
+      })
+    : undefined;
+
+  return {
+    speakers,
+    text: typeof rawSource?.text === 'string' ? rawSource.text : undefined,
+    chapterSource: typeof rawSource?.chapterSource === 'string' ? rawSource.chapterSource : undefined,
+    chapterConfig: rawSource?.chapterConfig && typeof rawSource.chapterConfig === 'object'
+      ? {
+          paragraphsPerChapter: typeof rawSource.chapterConfig.paragraphsPerChapter === 'number'
+            ? rawSource.chapterConfig.paragraphsPerChapter
+            : undefined,
+          model: typeof rawSource.chapterConfig.model === 'string'
+            ? rawSource.chapterConfig.model
+            : undefined,
+        }
+      : undefined,
+    chapters,
+    utterances,
+  };
 }
 
 const SENTENCE_END = /[.!?]+$/;

@@ -37,6 +37,20 @@ export function frameNumber(i: number, pad = 5): string {
   return String(i + 1).padStart(pad, '0');
 }
 
+export function formatExportTimeToken(seconds: number): string {
+  const centiseconds = Math.max(0, Math.round(seconds * 100));
+  const hours = Math.floor(centiseconds / 360000);
+  const minutes = Math.floor((centiseconds % 360000) / 6000);
+  const secs = Math.floor((centiseconds % 6000) / 100);
+  const cs = centiseconds % 100;
+  return `${String(hours).padStart(2, '0')}h${String(minutes).padStart(2, '0')}m${String(secs).padStart(2, '0')}s${String(cs).padStart(2, '0')}`;
+}
+
+export function buildExportBaseName(prefix: string, startSecond: number, endSecond: number): string {
+  const cleanPrefix = prefix.trim() || 'export';
+  return `${cleanPrefix}_${formatExportTimeToken(startSecond)}-${formatExportTimeToken(endSecond)}`;
+}
+
 export function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(

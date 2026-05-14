@@ -2,7 +2,7 @@ import React from 'react';
 import {
   DEFAULT_VIDEO, DEFAULT_VIDEO_GRADIENT, DEFAULT_VIDEO_LEVELS, DEFAULT_VIDEO_TONE,
   DEFAULT_VIDEO_COLOR, DEFAULT_VIDEO_DISTORTION, DEFAULT_VIDEO_DITHER,
-  DEFAULT_VIDEO_POSITION, type VideoShaderParams,
+  DEFAULT_VIDEO_POSITION, normalizeVideoShaderParams, type VideoShaderParams,
 } from '../../lib/types';
 import { VIDEO_PRESETS } from '../../lib/presets';
 import { Section, Select } from '../Controls';
@@ -70,7 +70,7 @@ export const VideoPanel: React.FC<Props> = ({
                 ]}
                 onChange={(name) => {
                   const p = VIDEO_PRESETS.find((x) => x.name === name);
-                  if (p) setVid(p.params);
+                  if (p) setVid(normalizeVideoShaderParams(p.params));
                 }}
               />
             </Section>

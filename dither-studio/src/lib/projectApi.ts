@@ -89,6 +89,8 @@ export async function createProjectExport(
     height: number;
     fps: number;
     totalFrames: number;
+    exportMode?: 'master' | 'web';
+    preserveAlpha?: boolean;
     startTime?: number;
     duration?: number;
     baseDuration?: number;

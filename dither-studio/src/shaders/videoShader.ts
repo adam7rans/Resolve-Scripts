@@ -8,15 +8,16 @@ void main() {
 `;
 
 export const dancingVideoFragmentShader = `
+const int MAX_GRADIENT_STOPS = 6;
 uniform sampler2D tDiffuse;
 uniform vec2 uResolution;
 // pre-shader gradient overlay
 uniform bool uGradientEnabled;
 uniform int uGradientType;           // 0 = linear, 1 = radial
-uniform vec3 uGradientColorA;
-uniform float uGradientOpacityA;
-uniform vec3 uGradientColorB;
-uniform float uGradientOpacityB;
+uniform int uGradientStopCount;
+uniform vec3 uGradientStopColors[MAX_GRADIENT_STOPS];
+uniform float uGradientStopOpacities[MAX_GRADIENT_STOPS];
+uniform float uGradientStopPositions[MAX_GRADIENT_STOPS];
 uniform float uGradientOpacity;
 uniform int uGradientBlendMode;      // 0 = normal, 1 = multiply, 2 = screen, 3 = overlay
 uniform float uGradientAngle;
@@ -79,6 +80,34 @@ const int STUCKI = 12;
 const int DIFFUSION_ROW = 13;
 const int DIFFUSION_COLUMN = 14;
 const int DIFFUSION_2D = 15;
+
+vec4 sampleGradient(float t) {
+  int stopCount = max(uGradientStopCount, 1);
+  vec3 color = uGradientStopColors[0];
+  float alpha = uGradientStopOpacities[0];
+
+  if (stopCount == 1 || t <= uGradientStopPositions[0]) {
+    return vec4(color, alpha);
+  }
+
+  for (int i = 1; i < MAX_GRADIENT_STOPS; i++) {
+    if (i >= stopCount) break;
+
+    float p0 = uGradientStopPositions[i - 1];
+    float p1 = max(uGradientStopPositions[i], p0 + 0.0001);
+    if (t <= p1 || i == stopCount - 1) {
+      float localT = clamp((t - p0) / (p1 - p0), 0.0, 1.0);
+      color = mix(uGradientStopColors[i - 1], uGradientStopColors[i], localT);
+      alpha = mix(uGradientStopOpacities[i - 1], uGradientStopOpacities[i], localT);
+      return vec4(color, alpha);
+    }
+  }
+
+  return vec4(
+    uGradientStopColors[stopCount - 1],
+    uGradientStopOpacities[stopCount - 1]
+  );
+}
 
 // 4x4 Bayer matrix (most common)
 float getBayer4x4(vec2 coord) {
@@ -265,13 +294,16 @@ void main() {
       vec2 gCenter = vec2(0.5 + uGradientOffsetX, 0.5 + uGradientOffsetY);
       gt = dot(vUv - gCenter, gDir) * uGradientScale + 0.5;
     } else {
-      // Radial gradient
+      // Radial gradient, aspect-corrected so circles stay circular on screen
       vec2 gCenter = vec2(0.5 + uGradientOffsetX, 0.5 + uGradientOffsetY);
-      gt = length(vUv - gCenter) * uGradientScale;
+      vec2 radialDelta = vUv - gCenter;
+      radialDelta.x *= uResolution.x / max(uResolution.y, 0.0001);
+      gt = length(radialDelta) * uGradientScale;
     }
     gt = clamp(gt, 0.0, 1.0);
-    vec3 gColor = mix(uGradientColorA, uGradientColorB, gt);
-    float pcAlpha = mix(uGradientOpacityA, uGradientOpacityB, gt);
+    vec4 g = sampleGradient(gt);
+    vec3 gColor = g.rgb;
+    float pcAlpha = g.a;
 
     // Blend modes
     vec3 blended;
@@ -398,10 +430,10 @@ export const dancingVideoShaderUniforms = {
   uResolution: { value: { x: 1920, y: 1080 } },
   uGradientEnabled: { value: false },
   uGradientType: { value: 0 },
-  uGradientColorA: { value: { x: 0, y: 0, z: 0 } },
-  uGradientOpacityA: { value: 1.0 },
-  uGradientColorB: { value: { x: 1, y: 1, z: 1 } },
-  uGradientOpacityB: { value: 1.0 },
+  uGradientStopCount: { value: 2 },
+  uGradientStopColors: { value: [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] },
+  uGradientStopOpacities: { value: [1, 1, 1, 1, 1, 1] },
+  uGradientStopPositions: { value: [0, 1, 1, 1, 1, 1] },
   uGradientOpacity: { value: 1.0 },
   uGradientBlendMode: { value: 1 },
   uGradientAngle: { value: 0.0 },

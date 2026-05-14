@@ -5,8 +5,8 @@
   "type": "module",
   "description": "Standalone dither noise + video processor for DaVinci Resolve. Renders the same animated dither background and video shader from w3rk17 to a PNG sequence importable into Resolve.",
   "scripts": {
-    "dev": "concurrently -k -n API,VITE -c cyan,green \"tsx server/index.ts\" \"vite\"",
-    "server": "tsx server/index.ts",
+    "dev": "concurrently -k -n API,VITE -c cyan,green \"tsx watch server/index.ts\" \"vite\"",
+    "server": "tsx watch server/index.ts",
     "build": "vite build",
     "preview": "vite preview"
   },

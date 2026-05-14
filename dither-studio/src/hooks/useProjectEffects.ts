@@ -107,6 +107,10 @@ export interface AutoSaveSettings {
   muted: boolean;
   mediaVolume: number;
   outroVolume: number;
+  projectHasVideo: boolean;
+  projectHasAudio: boolean;
+  videoInfoLoaded: boolean;
+  audioInfoLoaded: boolean;
 }
 
 /** Auto-save project settings whenever they change. */
@@ -119,10 +123,16 @@ export function useAutoSave(activeProjectId: string | null, settings: AutoSaveSe
     activeGuide, cropToGuide, bgExport, vidExport,
     microTimelines, selectedClipId,
     mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume,
+    projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded,
   } = settings;
 
   useEffect(() => {
     if (!activeProjectId) return;
+    // Avoid clobbering persisted settings while a media-backed project is still
+    // mid-load. This prevents a stale in-memory state from overwriting clip
+    // layouts or export params after refresh/HMR before metadata arrives.
+    if (projectHasVideo && !videoInfoLoaded) return;
+    if (projectHasAudio && !projectHasVideo && !audioInfoLoaded) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       saveSettings(activeProjectId, {
@@ -135,7 +145,7 @@ export function useAutoSave(activeProjectId: string | null, settings: AutoSaveSe
         ui: { mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume },
       }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, microTimelines, selectedClipId, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume]);
+  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, microTimelines, selectedClipId, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume, projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded]);
 }
 
 /**

@@ -8,7 +8,7 @@ import type { CaptionMode, TranscriptData } from '../lib/transcript';
 import type { ProjectTaskStatus } from '../lib/constants';
 import { GUIDES } from '../lib/constants';
 import { resolveExportRange, guideRectInVideoFrame } from '../lib/layoutUtils';
-import { canvasToPngBlob, frameNumber, seekVideoTo } from '../lib/exporter';
+import { buildExportBaseName, canvasToPngBlob, frameNumber, seekVideoTo } from '../lib/exporter';
 import { drawCaptionsToCanvas } from '../lib/captionCanvas';
 import {
   createProjectExport, uploadExportFrame, finishProjectExport,
@@ -86,8 +86,10 @@ export function createExportComposition(
     const video = videoElRef.current;
     const audio = audioSourceRef.current;
     const params = activeExportParamsRef.current;
+    const exportMode = params.exportMode ?? 'master';
     const sourceDuration = videoInfo?.duration ?? audioInfo?.duration ?? null;
     const range = resolveExportRange(params, sourceDuration);
+    const exportBaseName = buildExportBaseName(params.filenamePrefix, range.start, range.end);
     if (videoLayerOn && (!videoRenderer || !video)) throw new Error('Load a video before exporting the video layer.');
 
     // Pre-compute deterministic per-frame audio bands when audio is loaded.
@@ -98,6 +100,7 @@ export function createExportComposition(
     const activeGuideObj = cropToGuide ? GUIDES.find((g) => g.key === activeGuide) : null;
     const width = activeGuideObj ? activeGuideObj.w : Math.max(1, Math.floor(params.width));
     const height = activeGuideObj ? activeGuideObj.h : Math.max(1, Math.floor(params.height));
+    const preserveAlpha = exportMode === 'web' && !bgLayerOn;
 
     // Compute "kept segments" for jump-cut silence skipping during export.
     type KeptSegment = { srcStart: number; srcEnd: number; outStart: number };
@@ -165,11 +168,13 @@ export function createExportComposition(
       bgRenderer?.setSize(width, height);
       videoRenderer?.setSize(width, height);
       const created = await createProjectExport(projectId, {
-        prefix: params.filenamePrefix,
+        prefix: exportBaseName,
         width,
         height,
         fps: params.fps,
         totalFrames: total,
+        exportMode,
+        preserveAlpha,
         startTime: range.start,
         duration,
         baseDuration: contentDuration,
@@ -193,7 +198,7 @@ export function createExportComposition(
         ctx.clearRect(0, 0, width, height);
 
         // Fill with solid color when background layer is off and user chose a flat color
-        if (!bgLayerOn && bgOffMode === 'color') {
+        if (!preserveAlpha && !bgLayerOn && bgOffMode === 'color') {
           ctx.fillStyle = bgOffColor;
           ctx.fillRect(0, 0, width, height);
         }
@@ -271,7 +276,7 @@ export function createExportComposition(
 
         const blob = await canvasToPngBlob(canvas);
         throwIfAborted();
-        await uploadExportFrame(projectId, created.exportId, `${params.filenamePrefix}_${frameNumber(i)}.png`, blob);
+        await uploadExportFrame(projectId, created.exportId, `${exportBaseName}_${frameNumber(i)}.png`, blob);
         onProgress(i + 1, total);
         if (i % 2 === 0) {
           const pct = Math.round(((i + 1) / total) * 100);

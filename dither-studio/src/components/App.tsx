@@ -225,6 +225,8 @@ export const App: React.FC = () => {
     videoInfo, audioInfo, outroVolume, setPlaying, setPlayheadSecond,
   );
 
+  const activeProject = projects.find((p) => p.id === activeProjectId);
+
   // ---------- auto-save settings to active project ----------
   useAutoSave(activeProjectId, {
     bg, bgDither, vid, audioReactivity, music, limiter,
@@ -233,6 +235,10 @@ export const App: React.FC = () => {
     activeGuide, cropToGuide, bgExport, vidExport,
     microTimelines, selectedClipId,
     mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume,
+    projectHasVideo: !!activeProject?.hasVideo,
+    projectHasAudio: !!activeProject?.hasAudio,
+    videoInfoLoaded: !!videoInfo,
+    audioInfoLoaded: !!audioInfo,
   });
 
   // ---------- SSE stream for transcription progress ----------
@@ -311,7 +317,6 @@ export const App: React.FC = () => {
   );
 
   // ---------- layout ----------
-  const activeProject = projects.find((p) => p.id === activeProjectId);
   const exportLayerSummary = [
     bgLayerOn ? 'background' : null,
     videoLayerOn ? 'video' : null,
@@ -370,6 +375,8 @@ export const App: React.FC = () => {
         bgOffMode={bgOffMode}
         bgOffColor={bgOffColor}
         videoLayerOn={videoLayerOn}
+        vid={vid}
+        setVid={setVid}
         captionsLayerOn={captionsLayerOn}
         audioMode={audioMode}
         activeGuide={activeGuide}

@@ -1,5 +1,11 @@
 // Mirrors w3rk17/src/lib/three-presets.ts and DitherModeSelector.tsx
-import type { BackgroundParams, DitherParams, VideoShaderParams } from './types';
+import {
+  createDefaultVideoGradientStops,
+  normalizeVideoShaderParams,
+  type BackgroundParams,
+  type DitherParams,
+  type VideoShaderParams,
+} from './types';
 
 export interface Preset {
   name: string;
@@ -110,6 +116,8 @@ export interface VideoPreset {
 const baseVideoDefaults = {
   gradientEnabled: false,
   gradientType: 0,
+  gradientStops: createDefaultVideoGradientStops('#000000', 1, '#ffffff', 1),
+  gradientGuideVisible: false,
   gradientColorA: '#000000',
   gradientOpacityA: 1,
   gradientColorB: '#ffffff',
@@ -148,7 +156,7 @@ const baseVideoDefaults = {
 export const VIDEO_PRESETS: VideoPreset[] = [
   {
     name: 'Tight Focus V2',
-    params: {
+    params: normalizeVideoShaderParams({
       ...baseVideoDefaults,
       brightness: 0.8,
       contrast: 0.9,
@@ -161,11 +169,11 @@ export const VIDEO_PRESETS: VideoPreset[] = [
       distortionAmplitude: 0.005,
       distortionSpeed: 1.7,
       distortionAngle: 1,
-    },
+    }),
   },
   {
     name: 'Tight Focus',
-    params: {
+    params: normalizeVideoShaderParams({
       ...baseVideoDefaults,
       brightness: 1.3,
       contrast: 1.8,
@@ -178,11 +186,11 @@ export const VIDEO_PRESETS: VideoPreset[] = [
       distortionAmplitude: 0.005,
       distortionSpeed: 1.7,
       distortionAngle: 1,
-    },
+    }),
   },
   {
     name: 'High Contrast',
-    params: {
+    params: normalizeVideoShaderParams({
       ...baseVideoDefaults,
       brightness: 1.2,
       contrast: 3,
@@ -195,11 +203,11 @@ export const VIDEO_PRESETS: VideoPreset[] = [
       distortionAmplitude: 0.005,
       distortionSpeed: 0.7,
       distortionAngle: 2.3,
-    },
+    }),
   },
   {
     name: 'Medium Contrast',
-    params: {
+    params: normalizeVideoShaderParams({
       ...baseVideoDefaults,
       brightness: 1.2,
       contrast: 3,
@@ -212,6 +220,6 @@ export const VIDEO_PRESETS: VideoPreset[] = [
       distortionAmplitude: 0.005,
       distortionSpeed: 0.7,
       distortionAngle: 2.3,
-    },
+    }),
   },
 ];

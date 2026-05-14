@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { getProject, type ProjectMeta } from '../lib/projectApi';
 import {
   DEFAULT_CAPTION_STYLE, DEFAULT_CAPTION_SHADER,
+  normalizeVideoShaderParams,
   type BackgroundParams, type DitherParams, type VideoShaderParams,
   type CaptionStyle, type CaptionShaderParams,
 } from '../lib/types';
@@ -46,7 +47,7 @@ export const ImportPresetPanel: React.FC<ImportPresetProps> = ({
       if (proj.backgroundDither) setBgDither(proj.backgroundDither);
 
       // Video shader: levels, tone, color, distort, dither
-      if (proj.video) setVid(proj.video);
+      if (proj.video) setVid(normalizeVideoShaderParams(proj.video));
 
       // Captions: mode, font/style, shader
       if (proj.captionMode) setCaptionMode(proj.captionMode);

@@ -4,7 +4,7 @@ import {
   dancingVideoVertexShader,
   dancingVideoShaderUniforms,
 } from '../shaders/videoShader';
-import type { VideoShaderParams } from './types';
+import { MAX_VIDEO_GRADIENT_STOPS, type VideoShaderParams, type VideoGradientStop } from './types';
 
 /**
  * Renders an HTMLVideoElement through the single-pass video shader
@@ -91,10 +91,8 @@ export class VideoRenderer {
     // pre-shader gradient overlay
     u.uGradientEnabled.value = p.gradientEnabled;
     u.uGradientType.value = p.gradientType;
-    setVec3FromHex(u.uGradientColorA.value, p.gradientColorA);
-    u.uGradientOpacityA.value = p.gradientOpacityA;
-    setVec3FromHex(u.uGradientColorB.value, p.gradientColorB);
-    u.uGradientOpacityB.value = p.gradientOpacityB;
+    u.uGradientStopCount.value = Math.min(MAX_VIDEO_GRADIENT_STOPS, Math.max(1, p.gradientStops.length));
+    setGradientStopArray(u.uGradientStopColors.value as number[], u.uGradientStopOpacities.value as number[], u.uGradientStopPositions.value as number[], p.gradientStops);
     u.uGradientOpacity.value = p.gradientOpacity;
     u.uGradientBlendMode.value = p.gradientBlendMode;
     u.uGradientAngle.value = p.gradientAngle;
@@ -191,5 +189,28 @@ function setVec3FromHex(target: { x: number; y: number; z: number } | THREE.Colo
     target.x = c.r;
     target.y = c.g;
     target.z = c.b;
+  }
+}
+
+function setGradientStopArray(
+  colorArray: number[],
+  opacityArray: number[],
+  positionArray: number[],
+  stops: VideoGradientStop[],
+) {
+  const safeStops = stops.length > 0 ? stops : [
+    { id: 'stop-1', color: '#000000', opacity: 1, position: 0 },
+    { id: 'stop-2', color: '#ffffff', opacity: 1, position: 1 },
+  ];
+
+  for (let i = 0; i < MAX_VIDEO_GRADIENT_STOPS; i += 1) {
+    const stop = safeStops[Math.min(i, safeStops.length - 1)];
+    const color = new THREE.Color(stop.color);
+    const base = i * 3;
+    colorArray[base] = color.r;
+    colorArray[base + 1] = color.g;
+    colorArray[base + 2] = color.b;
+    opacityArray[i] = stop.opacity;
+    positionArray[i] = stop.position;
   }
 }

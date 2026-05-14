@@ -1,10 +1,11 @@
 import React from 'react';
 import type { CaptionMode, TranscriptData } from '../lib/transcript';
-import type { CaptionStyle, CaptionShaderParams, ExportParams } from '../lib/types';
+import type { CaptionStyle, CaptionShaderParams, ExportParams, VideoShaderParams } from '../lib/types';
 import { resolveExportRange, guideRectInVideoFrame } from '../lib/layoutUtils';
 import type { GUIDES } from '../lib/constants';
 import { ShaderCaptions } from './ShaderCaptions';
 import { OutroOverlay } from './OutroOverlay';
+import { GradientGuideOverlay } from './GradientGuideOverlay';
 import { StatusToast, type Toast } from './StatusToast';
 
 interface Props {
@@ -16,6 +17,8 @@ interface Props {
   bgOffMode: 'grid' | 'color';
   bgOffColor: string;
   videoLayerOn: boolean;
+  vid: VideoShaderParams;
+  setVid: React.Dispatch<React.SetStateAction<VideoShaderParams>>;
   captionsLayerOn: boolean;
   audioMode: boolean;
   activeGuide: string | null;
@@ -40,6 +43,7 @@ interface Props {
 export const PreviewArea: React.FC<Props> = ({
   previewWrapRef, bgCanvasRef, videoCanvasRef, frameStyle,
   bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, audioMode,
+  vid, setVid,
   activeGuide, cropToGuide, availableGuides, previewFrame,
   videoInfo, audioInfo, transcript,
   captionMode, captionStyle, captionShader,
@@ -68,6 +72,14 @@ export const PreviewArea: React.FC<Props> = ({
       ref={videoCanvasRef}
       style={{ ...frameStyle, display: videoLayerOn && !audioMode ? 'block' : 'none' }}
     />
+
+    {!audioMode && videoLayerOn && (
+      <GradientGuideOverlay
+        frame={previewFrame}
+        value={vid}
+        onChange={(next) => setVid(next)}
+      />
+    )}
 
     {/* composition guide outline (only the active one) */}
     {(() => {

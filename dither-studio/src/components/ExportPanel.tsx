@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Row, Section, Slider } from './Controls';
 import type { ExportParams } from '../lib/types';
+import { buildExportBaseName } from '../lib/exporter';
 
 export interface ExportPanelProps {
   params: ExportParams;
@@ -39,6 +40,11 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
   const end = clamp(fallbackEnd, start + minGap, totalDuration);
   const outroDuration = params.outroEnabled ? 5 : 0;
   const totalFrames = Math.max(1, Math.ceil((end - start + outroDuration) * params.fps));
+  const exportBaseName = useMemo(
+    () => buildExportBaseName(params.filenamePrefix, start, end),
+    [params.filenamePrefix, start, end],
+  );
+  const exportMode = params.exportMode ?? 'master';
 
   const set = (patch: Partial<ExportParams>) => onChange({ ...params, ...patch });
 
@@ -80,6 +86,37 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
       <Slider label="height" value={params.height} min={64} max={4320} step={1} onChange={(v) => set({ height: Math.round(v) })} />
       <Slider label="fps" value={params.fps} min={1} max={120} step={1} onChange={(v) => set({ fps: Math.round(v) })} />
 
+      <Row label="mode">
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <button
+            onClick={() => set({ exportMode: 'master' })}
+            style={{
+              padding: '4px 10px',
+              background: exportMode === 'master' ? '#1f6feb' : '#111',
+              color: exportMode === 'master' ? '#fff' : '#aaa',
+              border: `1px solid ${exportMode === 'master' ? '#1f6feb' : '#333'}`,
+              borderRadius: 3,
+              cursor: 'pointer',
+            }}
+          >
+            master
+          </button>
+          <button
+            onClick={() => set({ exportMode: 'web' })}
+            style={{
+              padding: '4px 10px',
+              background: exportMode === 'web' ? '#1f6feb' : '#111',
+              color: exportMode === 'web' ? '#fff' : '#aaa',
+              border: `1px solid ${exportMode === 'web' ? '#1f6feb' : '#333'}`,
+              borderRadius: 3,
+              cursor: 'pointer',
+            }}
+          >
+            web alpha
+          </button>
+        </div>
+      </Row>
+
       <Row label="prefix">
         <input
           type="text"
@@ -97,6 +134,11 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
       </div>
       <div style={{ marginTop: 4, color: '#666', fontSize: 11 }}>
         Set the time range using the timeline beneath the preview.
+      </div>
+      <div style={{ marginTop: 4, color: '#666', fontSize: 11, lineHeight: 1.4 }}>
+        {exportMode === 'master'
+          ? 'Master mode keeps the high-fidelity stitch path for editing / archival outputs.'
+          : 'Web alpha mode preserves transparency and stitches to a compressed web delivery format.'}
       </div>
       {layerSummary && <div style={{ marginTop: 4, color: '#777', lineHeight: 1.4 }}>Layers: {layerSummary}</div>}
       {clipName && <div style={{ marginTop: 4, color: '#1f6feb', fontSize: 11 }}>Exporting: {clipName}</div>}
@@ -171,7 +213,7 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
         </div>
       )}
       <div style={{ color: '#666', marginTop: 6, lineHeight: 1.5 }}>
-        Files: <code>{params.filenamePrefix}_00001.png</code> … inside this project folder.<br />
+        Files: <code>{exportBaseName}_00001.png</code> … inside this project folder.<br />
         In Resolve: Media Pool → Import → enable "Image Sequence" → select first frame.
       </div>
     </Section>

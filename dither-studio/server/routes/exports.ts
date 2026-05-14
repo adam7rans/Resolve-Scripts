@@ -37,12 +37,16 @@ async function stitchVideo(projectId: string, exportId: string) {
     Array.isArray(manifest.keptSegments) ? manifest.keptSegments : [];
   const hasKeptSegments = keptSegments.length > 0;
 
-  // When the background layer was OFF for the export, the PNG sequence has
-  // an alpha channel. libx264/yuv420p (the .mp4 path) cannot preserve alpha
-  // and would flatten transparent areas to black. Emit a ProRes 4444 .mov
-  // instead, which Resolve and other NLEs accept as an alpha-capable video.
-  const wantAlpha = manifest?.layers?.background === false;
-  const ext = wantAlpha ? 'mov' : 'mp4';
+  const exportMode = manifest?.exportMode === 'web' ? 'web' : 'master';
+  // Web mode explicitly asks the PNG export stage to preserve transparency;
+  // master mode keeps the legacy "background off implies alpha-capable master"
+  // behavior for existing editing/archive flows.
+  const wantAlpha = exportMode === 'web'
+    ? manifest?.preserveAlpha === true
+    : manifest?.layers?.background === false;
+  const ext = exportMode === 'web'
+    ? (wantAlpha ? 'webm' : 'mp4')
+    : (wantAlpha ? 'mov' : 'mp4');
   // Output filename: use trimmed prefix (or project name)
   const outName = prefix || proj.name?.trim() || 'video';
   const outPath = path.join(dir, `${outName}.${ext}`);
@@ -108,6 +112,8 @@ async function stitchVideo(projectId: string, exportId: string) {
     const ratio = 1.0 / (1.0 - (sc?.amount ?? 0.5));
     const attack = sc?.attackMs ?? 80;
     const release = sc?.releaseMs ?? 350;
+    const hasMusicSource = audioSources.some((src, i) => i > 0 && !src.isOutro);
+    const needsSpeechTrigger = hasMusicSource && scEnabled;
 
     const lim = settings?.limiter;
     const limEnabled = lim?.enabled !== false;
@@ -140,7 +146,13 @@ async function stitchVideo(projectId: string, exportId: string) {
         if (limEnabled) {
           filter += `,alimiter=level_in=1:level_out=1:limit=${limThresh.toFixed(3)}:attack=5:release=${(limRelease * 1000).toFixed(0)}`;
         }
-        filter += `,volume=${limOut.toFixed(2)},apad=whole_dur=${duration.toFixed(3)},asplit=2[speech_trigger][speech_mix];`;
+        filter += `,volume=${limOut.toFixed(2)},apad=whole_dur=${duration.toFixed(3)}`;
+        if (needsSpeechTrigger) {
+          filter += `,asplit=2[speech_trigger][speech_mix]`;
+        } else {
+          filter += `[speech_mix]`;
+        }
+        filter += ';';
       } else if (src.isOutro) {
         const delayMs = Math.round((manifest.baseDuration || 0) * 1000);
         filter += `[${idx}:a]volume=${src.volume.toFixed(2)},adelay=${delayMs}|${delayMs}[outro_mix];`;
@@ -168,10 +180,16 @@ async function stitchVideo(projectId: string, exportId: string) {
     audioMap = '-map 0:v';
   }
 
-  const videoCodec = wantAlpha
-    ? '-c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le -alpha_bits 16 -vendor apl0'
-    : '-c:v libx264 -crf 18 -pix_fmt yuv420p';
-  const audioCodec = wantAlpha ? '-c:a pcm_s16le' : '-c:a aac -b:a 192k';
+  const videoCodec = exportMode === 'web'
+    ? (wantAlpha
+        ? '-c:v libvpx-vp9 -pix_fmt yuva420p -b:v 0 -crf 36 -deadline good -cpu-used 3 -row-mt 1 -tile-columns 2 -frame-parallel 0 -auto-alt-ref 0'
+        : '-c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p -movflags +faststart')
+    : (wantAlpha
+        ? '-c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le -alpha_bits 16 -vendor apl0'
+        : '-c:v libx264 -crf 18 -pix_fmt yuv420p');
+  const audioCodec = exportMode === 'web'
+    ? (wantAlpha ? '-c:a libopus -b:a 96k' : '-c:a aac -b:a 128k')
+    : (wantAlpha ? '-c:a pcm_s16le' : '-c:a aac -b:a 192k');
   // NOTE: exec is used here intentionally — the ffmpeg command requires shell
   // features (complex filter_complex quoting). All inputs are server-controlled
   // paths and numeric values, not user-supplied strings.

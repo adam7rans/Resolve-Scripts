@@ -13,12 +13,23 @@ export interface DitherParams {
   colorB: string;       // hex, gradient endpoint B
 }
 
+export interface VideoGradientStop {
+  id: string;
+  color: string;
+  opacity: number;
+  position: number;
+}
+
+export const MAX_VIDEO_GRADIENT_STOPS = 6;
+
 // All uniforms of src/shaders/videoShader.ts (dancingVideoShader on the site).
 // This single shader does levels/tone/color/distortion/dither in one pass.
 export interface VideoShaderParams {
   // pre-shader gradient overlay (composited onto video before all processing)
   gradientEnabled: boolean;
   gradientType: number;              // 0 = linear, 1 = radial
+  gradientStops: VideoGradientStop[];
+  gradientGuideVisible: boolean;
   gradientColorA: string;            // hex
   gradientOpacityA: number;          // per-color opacity for A (0..1)
   gradientColorB: string;            // hex
@@ -72,6 +83,89 @@ export interface VideoShaderParams {
   ditherGradientOffsetY: number;    // gradient center vertical shift (-1..1)
 }
 
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function clampGradientScale(value: number): number {
+  return Math.max(0.1, Math.min(5, value));
+}
+
+function makeGradientStop(index: number, color: string, opacity: number, position: number): VideoGradientStop {
+  return {
+    id: `stop-${index + 1}`,
+    color,
+    opacity: clamp01(opacity),
+    position: clamp01(position),
+  };
+}
+
+export function createDefaultVideoGradientStops(
+  colorA = '#000000',
+  opacityA = 1,
+  colorB = '#ffffff',
+  opacityB = 1,
+): VideoGradientStop[] {
+  return [
+    makeGradientStop(0, colorA, opacityA, 0),
+    makeGradientStop(1, colorB, opacityB, 1),
+  ];
+}
+
+export function normalizeVideoGradientStops(
+  stops: VideoGradientStop[] | undefined,
+  fallbackA = '#000000',
+  fallbackOpacityA = 1,
+  fallbackB = '#ffffff',
+  fallbackOpacityB = 1,
+): VideoGradientStop[] {
+  const source = Array.isArray(stops) && stops.length > 0
+    ? stops
+    : createDefaultVideoGradientStops(fallbackA, fallbackOpacityA, fallbackB, fallbackOpacityB);
+
+  const normalized = source
+    .slice(0, MAX_VIDEO_GRADIENT_STOPS)
+    .map((stop, index) => ({
+      id: typeof stop?.id === 'string' && stop.id.length > 0 ? stop.id : `stop-${index + 1}`,
+      color: typeof stop?.color === 'string' && stop.color.length > 0 ? stop.color : index === 0 ? fallbackA : fallbackB,
+      opacity: clamp01(typeof stop?.opacity === 'number' ? stop.opacity : index === 0 ? fallbackOpacityA : fallbackOpacityB),
+      position: clamp01(typeof stop?.position === 'number' ? stop.position : index === 0 ? 0 : 1),
+    }))
+    .sort((a, b) => a.position - b.position)
+    .map((stop, index) => ({ ...stop, id: stop.id || `stop-${index + 1}` }));
+
+  if (normalized.length === 1) {
+    normalized.push(makeGradientStop(1, fallbackB, fallbackOpacityB, 1));
+  }
+
+  normalized[0] = { ...normalized[0], position: 0 };
+  normalized[normalized.length - 1] = { ...normalized[normalized.length - 1], position: 1 };
+  return normalized;
+}
+
+export function withGradientStops(
+  params: VideoShaderParams,
+  stops: VideoGradientStop[],
+): VideoShaderParams {
+  const normalizedStops = normalizeVideoGradientStops(
+    stops,
+    params.gradientColorA,
+    params.gradientOpacityA,
+    params.gradientColorB,
+    params.gradientOpacityB,
+  );
+  const firstStop = normalizedStops[0];
+  const lastStop = normalizedStops[normalizedStops.length - 1];
+  return {
+    ...params,
+    gradientStops: normalizedStops,
+    gradientColorA: firstStop.color,
+    gradientOpacityA: firstStop.opacity,
+    gradientColorB: lastStop.color,
+    gradientOpacityB: lastStop.opacity,
+  };
+}
+
 export interface BackgroundParams {
   noiseType: NoiseType;
   complexity: number;
@@ -107,6 +201,7 @@ export interface ExportParams {
   fps: number;
   duration: number;        // seconds (background) — fallback when endSecond is absent
   filenamePrefix: string;
+  exportMode?: 'master' | 'web';
   startSecond: number;     // start time offset (seconds)
   endSecond?: number;      // end time (seconds) — when absent, uses startSecond + duration
   outroEnabled?: boolean;  // 5s frozen-frame outro
@@ -201,6 +296,8 @@ export const DEFAULT_DITHER: DitherParams = {
 export const DEFAULT_VIDEO: VideoShaderParams = {
   gradientEnabled: false,
   gradientType: 0,
+  gradientStops: createDefaultVideoGradientStops('#000000', 1, '#ffffff', 1),
+  gradientGuideVisible: false,
   gradientColorA: '#000000',
   gradientOpacityA: 1,
   gradientColorB: '#ffffff',
@@ -250,6 +347,8 @@ export const DEFAULT_VIDEO: VideoShaderParams = {
 export const DEFAULT_VIDEO_GRADIENT: Partial<VideoShaderParams> = {
   gradientEnabled: DEFAULT_VIDEO.gradientEnabled,
   gradientType: DEFAULT_VIDEO.gradientType,
+  gradientStops: DEFAULT_VIDEO.gradientStops.map((stop) => ({ ...stop })),
+  gradientGuideVisible: DEFAULT_VIDEO.gradientGuideVisible,
   gradientColorA: DEFAULT_VIDEO.gradientColorA,
   gradientOpacityA: DEFAULT_VIDEO.gradientOpacityA,
   gradientColorB: DEFAULT_VIDEO.gradientColorB,
@@ -261,6 +360,25 @@ export const DEFAULT_VIDEO_GRADIENT: Partial<VideoShaderParams> = {
   gradientOffsetX: DEFAULT_VIDEO.gradientOffsetX,
   gradientOffsetY: DEFAULT_VIDEO.gradientOffsetY,
 };
+
+export function normalizeVideoShaderParams(input?: Partial<VideoShaderParams> | null): VideoShaderParams {
+  const merged = { ...DEFAULT_VIDEO, ...(input ?? {}) };
+  const normalizedStops = normalizeVideoGradientStops(
+    input?.gradientStops,
+    merged.gradientColorA,
+    merged.gradientOpacityA,
+    merged.gradientColorB,
+    merged.gradientOpacityB,
+  );
+  const withStops = withGradientStops(merged, normalizedStops);
+  return {
+    ...withStops,
+    gradientGuideVisible: typeof input?.gradientGuideVisible === 'boolean'
+      ? input.gradientGuideVisible
+      : DEFAULT_VIDEO.gradientGuideVisible,
+    gradientScale: clampGradientScale(withStops.gradientScale),
+  };
+}
 
 export const DEFAULT_VIDEO_LEVELS: Partial<VideoShaderParams> = {
   blackPoint: DEFAULT_VIDEO.blackPoint,
@@ -332,6 +450,7 @@ export const DEFAULT_EXPORT: ExportParams = {
   fps: 30,
   duration: 10,
   filenamePrefix: 'dither',
+  exportMode: 'master',
   startSecond: 0,
   endSecond: 10,
   outroEnabled: false,

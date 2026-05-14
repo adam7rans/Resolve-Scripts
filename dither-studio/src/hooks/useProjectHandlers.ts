@@ -4,6 +4,7 @@ import { MusicPlayer, DEFAULT_MUSIC_PARAMS } from '../lib/MusicPlayer';
 import {
   DEFAULT_BACKGROUND, DEFAULT_DITHER, DEFAULT_VIDEO, DEFAULT_EXPORT,
   DEFAULT_CAPTION_STYLE, DEFAULT_AUDIO_REACTIVITY, DEFAULT_CAPTION_SHADER,
+  normalizeVideoShaderParams,
   type BackgroundParams, type DitherParams, type VideoShaderParams, type ExportParams, type CaptionStyle,
   type AudioReactivityParams, type CaptionShaderParams, type MicroTimeline,
 } from '../lib/types';
@@ -155,7 +156,7 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
       s.setTranscriptName(null);
       if (proj.background) s.setBg(proj.background);
       if (proj.backgroundDither) s.setBgDither(proj.backgroundDither);
-      if (proj.video) s.setVid({ ...DEFAULT_VIDEO, ...proj.video });
+      if (proj.video) s.setVid(normalizeVideoShaderParams(proj.video));
       if (proj.audioReactivity) s.setAudioReactivity({ ...DEFAULT_AUDIO_REACTIVITY, ...proj.audioReactivity });
       else s.setAudioReactivity(DEFAULT_AUDIO_REACTIVITY);
       if (proj.music) {
