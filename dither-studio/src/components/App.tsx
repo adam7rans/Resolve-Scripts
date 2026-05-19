@@ -30,6 +30,7 @@ import { createTogglePlay, createHandleSeekPlayhead, usePlaybackKeyboard } from 
 import { useRenderLoop } from '../hooks/useRenderLoop';
 import { usePlayheadTick } from '../hooks/usePlayheadTick';
 import { useSSEStream, useAutoSave, useProjectRouting } from '../hooks/useProjectEffects';
+import { useAppUndoRedo } from '../hooks/useAppUndoRedo';
 import { useClipHandlers } from '../hooks/useClipHandlers';
 import { useRefSync, useParamPush } from '../hooks/useParamSync';
 import { SidebarPanel } from './panels/SidebarPanel';
@@ -84,6 +85,9 @@ export const App: React.FC = () => {
     jumpCutsEnabled, setJumpCutsEnabled,
     jumpCutGapMs, setJumpCutGapMs,
     jumpCutPaddingMs, setJumpCutPaddingMs,
+    customCutPaddingMs, setCustomCutPaddingMs,
+    showSilenceGaps, setShowSilenceGaps,
+    showFillerCuts, setShowFillerCuts,
     jumpCutGapOverrides,
     jumpCutGapDisabled,
     selectedGapKey,
@@ -91,9 +95,12 @@ export const App: React.FC = () => {
     jumpCutGapsEffective,
     jumpCutsEnabledRef,
     jumpCutGapListRef,
+    customCuts, setCustomCuts,
     handleAdjustGap,
     handleResetGap,
     handleResetAllGaps,
+    handleAddCustomCuts,
+    handleClearCustomCuts,
     handleToggleGapDisabled,
     handleSelectGap,
   } = jumpCuts;
@@ -221,7 +228,7 @@ export const App: React.FC = () => {
   );
   // Playhead tick: keeps playhead in sync with media, handles jump-cuts, clips, and outro.
   usePlayheadTick(
-    { mediaElRef, musicPlayerRef, outroAudioRef, playingRef, playheadRef, playingInClipRef, selectedClipRef, activeExportParamsRef, jumpCutsEnabledRef, jumpCutGapListRef },
+    { mediaElRef, audioSourceRef, musicPlayerRef, outroAudioRef, playingRef, playheadRef, playingInClipRef, selectedClipRef, activeExportParamsRef, jumpCutsEnabledRef, jumpCutGapListRef },
     videoInfo, audioInfo, outroVolume, setPlaying, setPlayheadSecond,
   );
 
@@ -234,12 +241,37 @@ export const App: React.FC = () => {
     bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn,
     activeGuide, cropToGuide, bgExport, vidExport,
     microTimelines, selectedClipId,
+    customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
+    showSilenceGaps, showFillerCuts,
     mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume,
     projectHasVideo: !!activeProject?.hasVideo,
     projectHasAudio: !!activeProject?.hasAudio,
     videoInfoLoaded: !!videoInfo,
     audioInfoLoaded: !!audioInfo,
   });
+
+  // ---------- undo / redo (Cmd+Z / Cmd+Shift+Z) ----------
+  useAppUndoRedo(
+    {
+      bg, bgDither, vid, audioReactivity, music, limiter,
+      captionMode, captionStyle, captionShader,
+      bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn,
+      activeGuide, cropToGuide, bgExport, vidExport,
+      microTimelines, selectedClipId, customCuts,
+      jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
+      showSilenceGaps, showFillerCuts, muted, mediaVolume, outroVolume,
+    },
+    {
+      setBg, setBgDither, setVid, setAudioReactivity, setMusic, setLimiter,
+      setCaptionMode, setCaptionStyle, setCaptionShader,
+      setBgLayerOn, setBgOffMode, setBgOffColor, setVideoLayerOn, setCaptionsLayerOn, setMusicLayerOn,
+      setActiveGuide, setCropToGuide, setBgExport, setVidExport,
+      setMicroTimelines, setSelectedClipId, setCustomCuts,
+      setJumpCutsEnabled, setJumpCutGapMs, setJumpCutPaddingMs, setCustomCutPaddingMs,
+      setShowSilenceGaps, setShowFillerCuts, setMuted, setMediaVolume, setOutroVolume,
+    },
+    activeProjectId,
+  );
 
   // ---------- SSE stream for transcription progress ----------
   useSSEStream({
@@ -260,6 +292,8 @@ export const App: React.FC = () => {
     setVideoInfo, setAudioInfo, setPlayheadSecond, setTranscript, setTranscriptName, setPlaying,
     setAudioReactivity, setMusicInfo, setMusic, setLimiter,
     setMicroTimelines, setSelectedClipId, setPendingClipStart,
+    setCustomCuts, setJumpCutsEnabled, setJumpCutGapMs, setJumpCutPaddingMs, setCustomCutPaddingMs,
+    setShowSilenceGaps, setShowFillerCuts,
     addToast,
   };
   const handleCreateProject = createHandleCreateProject(projectRefs, projectSetters);
@@ -438,6 +472,15 @@ export const App: React.FC = () => {
         jumpCutsEnabled={jumpCutsEnabled} setJumpCutsEnabled={setJumpCutsEnabled}
         jumpCutGapMs={jumpCutGapMs} setJumpCutGapMs={setJumpCutGapMs}
         jumpCutPaddingMs={jumpCutPaddingMs} setJumpCutPaddingMs={setJumpCutPaddingMs}
+        customCuts={customCuts}
+        customCutPaddingMs={customCutPaddingMs}
+        setCustomCutPaddingMs={setCustomCutPaddingMs}
+        showSilenceGaps={showSilenceGaps}
+        setShowSilenceGaps={setShowSilenceGaps}
+        showFillerCuts={showFillerCuts}
+        setShowFillerCuts={setShowFillerCuts}
+        onAddCustomCuts={handleAddCustomCuts}
+        onClearCustomCuts={handleClearCustomCuts}
         bgLayerOn={bgLayerOn} setBgLayerOn={setBgLayerOn}
         bgOffMode={bgOffMode} setBgOffMode={setBgOffMode}
         bgOffColor={bgOffColor} setBgOffColor={setBgOffColor}

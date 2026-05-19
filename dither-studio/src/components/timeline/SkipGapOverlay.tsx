@@ -1,7 +1,15 @@
 import React from 'react';
 import { clamp, fmt, type DragKind } from './timelineUtils';
 
-interface SkipGap { startMs: number; endMs: number; key: string }
+interface SkipGap { startMs: number; endMs: number; key: string; kind?: 'silence' | 'custom'; label?: string }
+
+// Color palette: silence = orange, custom/filler = green
+const SILENCE_COLOR = '255,180,80';
+const CUSTOM_COLOR = '48,209,88';
+
+function gapBaseColor(g: SkipGap): string {
+  return g.kind === 'custom' ? CUSTOM_COLOR : SILENCE_COLOR;
+}
 
 interface Props {
   skipGaps: SkipGap[];
@@ -26,7 +34,7 @@ export const SkipGapOverlay: React.FC<Props> = ({
   secToPct, timeAtClientX, onSelectGap, onPlayheadChange, startDrag, onResetSkipGap,
 }) => (
   <>
-    {/* skip-silence gaps (jump cuts) */}
+    {/* skip gaps (silence + custom/filler cuts) */}
     {skipGaps.map((g) => {
       const startSec = g.startMs / 1000;
       const endSec = g.endMs / 1000;
@@ -40,11 +48,15 @@ export const SkipGapOverlay: React.FC<Props> = ({
       const isDraggingThis = !!dragKind && typeof dragKind === 'object'
         && (dragKind.kind === 'gap-start' || dragKind.kind === 'gap-end')
         && dragKind.key === g.key;
-      const stripeColor = isDisabled ? '140,140,140' : isOverridden ? '120,200,255' : '255,180,80';
+      const baseCol = gapBaseColor(g);
+      const stripeColor = isDisabled ? '140,140,140' : isOverridden ? '120,200,255' : baseCol;
       const baseAlpha = isDisabled ? 0.18 : (isHover || isDraggingThis || isSelected) ? 0.5 : 0.28;
       const handleColor = isDisabled
         ? 'rgba(140,140,140,0.6)'
-        : isOverridden ? 'rgba(120,200,255,0.95)' : 'rgba(255,180,80,0.9)';
+        : isOverridden ? 'rgba(120,200,255,0.95)' : `rgba(${baseCol},0.9)`;
+      const isCustom = g.kind === 'custom';
+      const typeLabel = isCustom ? 'Filler cut' : 'Skip silence';
+      const handleLabel = isCustom ? 'Filler-cut' : 'Skip-silence';
       return (
         <React.Fragment key={`gap-${g.key}`}>
           <div
@@ -65,7 +77,8 @@ export const SkipGapOverlay: React.FC<Props> = ({
               startDrag('play')(e);
             }}
             title={
-              `Skip silence: ${fmt(startSec)} – ${fmt(endSec)} (${(g.endMs - g.startMs).toFixed(0)}ms)` +
+              `${typeLabel}: ${fmt(startSec)} – ${fmt(endSec)} (${(g.endMs - g.startMs).toFixed(0)}ms)` +
+              (g.label ? `\n"${g.label}"` : '') +
               (isDisabled ? '\nDisabled — selected + Delete to restore' : '') +
               (isOverridden ? '\nEdited — right-click to reset' : '\nDrag the edges to adjust')
             }
@@ -73,9 +86,10 @@ export const SkipGapOverlay: React.FC<Props> = ({
               position: 'absolute',
               left: `${l}%`,
               width: `${r - l}%`,
-              top: 0, bottom: 0,
-              background:
-                `repeating-linear-gradient(45deg, rgba(${stripeColor},${baseAlpha}) 0 4px, rgba(20,12,0,${isDisabled ? 0.3 : 0.55}) 4px 8px)`,
+              top: 4, bottom: 4,
+              background: isCustom
+                ? `repeating-linear-gradient(-45deg, rgba(${stripeColor},${baseAlpha}) 0 3px, rgba(8,20,8,${isDisabled ? 0.3 : 0.55}) 3px 6px)`
+                : `repeating-linear-gradient(45deg, rgba(${stripeColor},${baseAlpha}) 0 4px, rgba(20,12,0,${isDisabled ? 0.3 : 0.55}) 4px 8px)`,
               borderLeft: `1px solid rgba(${stripeColor},${isDisabled ? 0.4 : 0.6})`,
               borderRight: `1px solid rgba(${stripeColor},${isDisabled ? 0.4 : 0.6})`,
               outline: isSelected ? `2px solid rgba(${stripeColor},1)` : 'none',
@@ -92,11 +106,11 @@ export const SkipGapOverlay: React.FC<Props> = ({
               <div
                 onPointerDown={(e) => { e.stopPropagation(); onSelectGap?.(g.key); startDrag({ kind: 'gap-start', key: g.key })(e); }}
                 onPointerEnter={() => onHoverGap(g.key)}
-                title={`Skip-silence start: ${fmt(startSec)} — drag to adjust`}
+                title={`${handleLabel} start: ${fmt(startSec)} — drag to adjust`}
                 style={{
                   position: 'absolute',
                   left: `calc(${l}% - 3px)`,
-                  top: -2, bottom: -2, width: 6,
+                  top: 2, bottom: 2, width: 6,
                   background: handleColor,
                   borderRadius: 2,
                   cursor: 'ew-resize',
@@ -107,11 +121,11 @@ export const SkipGapOverlay: React.FC<Props> = ({
               <div
                 onPointerDown={(e) => { e.stopPropagation(); onSelectGap?.(g.key); startDrag({ kind: 'gap-end', key: g.key })(e); }}
                 onPointerEnter={() => onHoverGap(g.key)}
-                title={`Skip-silence end: ${fmt(endSec)} — drag to adjust`}
+                title={`${handleLabel} end: ${fmt(endSec)} — drag to adjust`}
                 style={{
                   position: 'absolute',
                   left: `calc(${r}% - 3px)`,
-                  top: -2, bottom: -2, width: 6,
+                  top: 2, bottom: 2, width: 6,
                   background: handleColor,
                   borderRadius: 2,
                   cursor: 'ew-resize',
@@ -134,7 +148,8 @@ export const SkipGapOverlay: React.FC<Props> = ({
       const r = clamp(secToPct(endSec), 0, 100);
       if (r <= l) return null;
       const isOverridden = !!skipGapOverrides[g.key];
-      const stripeColor = isOverridden ? '120,200,255' : '255,180,80';
+      const baseCol = gapBaseColor(g);
+      const stripeColor = isOverridden ? '120,200,255' : baseCol;
       return (
         <div
           key={`eff-${g.key}`}

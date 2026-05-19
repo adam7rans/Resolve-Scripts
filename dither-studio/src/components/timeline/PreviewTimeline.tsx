@@ -25,6 +25,7 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   const projectDuration = totalDuration + (outroEnabled ? OUTRO_DUR : 0);
 
   const [view, setView] = useState<{ s: number; e: number }>({ s: 0, e: projectDuration });
+  const [followPlayhead, setFollowPlayhead] = useState(false);
 
   useEffect(() => {
     if (projectDuration <= MIN_VIEW_SEC * 1.5) return;
@@ -34,6 +35,18 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   const viewStart = view.s;
   const viewEnd = Math.max(view.s + MIN_VIEW_SEC, Math.min(view.e, projectDuration));
   const viewSpan = Math.max(MIN_VIEW_SEC, viewEnd - viewStart);
+
+  // Auto-scroll when followPlayhead is on and playhead leaves visible area
+  useEffect(() => {
+    if (!followPlayhead) return;
+    const isZoomed = viewSpan < projectDuration * 0.99;
+    if (!isZoomed) return;
+    const margin = viewSpan * 0.25;
+    if (playhead < viewStart + margin * 0.3 || playhead > viewStart + viewSpan - margin * 0.3) {
+      const ns = clamp(playhead - margin, 0, Math.max(0, projectDuration - viewSpan));
+      setView({ s: ns, e: ns + viewSpan });
+    }
+  });
 
   const trackRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -50,6 +63,21 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   };
 
   const selectedClip = microTimelines.find(mt => mt.id === selectedId) ?? null;
+
+  let skippedSec = 0;
+  let baseDur = selectedClip ? (selectedClip.endSecond - selectedClip.startSecond) : projectDuration;
+  if (skipGapsEnabled) {
+    for (const g of skipGapsEffective) {
+      const gStart = g.startMs / 1000;
+      const gEnd = g.endMs / 1000;
+      const overlapStart = Math.max(selectedClip ? selectedClip.startSecond : 0, gStart);
+      const overlapEnd = Math.min(selectedClip ? selectedClip.endSecond : projectDuration, gEnd);
+      if (overlapEnd > overlapStart) {
+        skippedSec += (overlapEnd - overlapStart);
+      }
+    }
+  }
+  const finalDur = baseDur - skippedSec;
 
   useEffect(() => {
     if (!dragKind) return;
@@ -150,6 +178,7 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
     if (!r) return;
     e.preventDefault();
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    setFollowPlayhead(false); // manual scroll disables follow
     const x = e.clientX - r.left;
     const thumbW = (viewSpan / projectDuration) * r.width;
     const thumbX = (viewStart / projectDuration) * r.width;
@@ -186,11 +215,18 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
             <span style={{ color: '#888' }}> · {selectedClip.name} {fmt(selectedClip.endSecond - selectedClip.startSecond)}</span>
           )}
         </span>
-        <span>
-          {selectedClip
-            ? <>{selectedClip.name}: {fmt(selectedClip.startSecond)} → {fmt(selectedClip.endSecond)}</>
-            : `${microTimelines.length} clip${microTimelines.length !== 1 ? 's' : ''}`
-          }
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>
+            {selectedClip
+              ? <>{selectedClip.name}: {fmt(selectedClip.startSecond)} → {fmt(selectedClip.endSecond)}</>
+              : `${microTimelines.length} clip${microTimelines.length !== 1 ? 's' : ''}`
+            }
+          </span>
+          {skipGapsEnabled && skippedSec > 0 && (
+            <span style={{ background: '#2a2a2a', padding: '2px 6px', borderRadius: 4, color: '#aaa' }}>
+              Final: <span style={{ color: '#fff' }}>{fmt(finalDur)}</span> <span style={{ color: '#eb6f1f' }}>(−{fmt(skippedSec)} cut)</span>
+            </span>
+          )}
         </span>
       </div>
 
@@ -218,8 +254,8 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
           startDrag={startDrag}
         />
 
-        {/* skip-silence gaps */}
-        {skipGapsEnabled && (
+        {/* skip-silence gaps — always visible when showSilence/showFiller toggles are on; skipGapsEnabled only controls playback */}
+        {skipGaps.length > 0 && (
           <SkipGapOverlay
             skipGaps={skipGaps}
             skipGapsEffective={skipGapsEffective}
@@ -282,6 +318,8 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
         onZoomIn={zoomIn}
         onZoomOut={zoomOut}
         onResetView={resetView}
+        followPlayhead={followPlayhead}
+        onToggleFollow={() => setFollowPlayhead(f => !f)}
         skipGapsEnabled={skipGapsEnabled}
         selectedGapKey={selectedGapKey}
         skipGapDisabled={skipGapDisabled}
