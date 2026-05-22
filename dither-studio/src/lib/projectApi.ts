@@ -15,6 +15,24 @@ export interface ProjectData extends ProjectMeta {
   [key: string]: any;
 }
 
+export interface PresetMeta {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface PresetData extends PresetMeta {
+  [key: string]: any;
+}
+
+export interface NativeImportResult {
+  ok: boolean;
+  mediaType: 'video' | 'audio';
+  filename: string;
+  originalName: string;
+}
+
 const BASE = '/api';
 
 export async function listProjects(): Promise<ProjectMeta[]> {
@@ -36,6 +54,28 @@ export async function createProject(name: string): Promise<{ id: string; name: s
 export async function getProject(id: string): Promise<ProjectData> {
   const res = await fetch(`${BASE}/projects/${id}`);
   if (!res.ok) throw new Error('Project not found');
+  return res.json();
+}
+
+export async function listPresets(): Promise<PresetMeta[]> {
+  const res = await fetch(`${BASE}/presets`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function createPreset(name: string, settings: Record<string, any>): Promise<PresetMeta> {
+  const res = await fetch(`${BASE}/presets`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, settings }),
+  });
+  if (!res.ok) throw new Error('Failed to create preset');
+  return res.json();
+}
+
+export async function getPreset(id: string): Promise<PresetData> {
+  const res = await fetch(`${BASE}/presets/${id}`);
+  if (!res.ok) throw new Error('Preset not found');
   return res.json();
 }
 
@@ -69,6 +109,21 @@ export async function uploadVideo(
     form.append('video', file);
     xhr.send(form);
   });
+}
+
+export async function importNativeMedia(id: string): Promise<NativeImportResult> {
+  const res = await fetch(`${BASE}/projects/${id}/import-native`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    let message = `Import failed: ${res.status}`;
+    try {
+      const data = await res.json() as { error?: string };
+      if (data?.error) message = data.error;
+    } catch {}
+    throw new Error(message);
+  }
+  return res.json();
 }
 
 export async function uploadCaption(id: string, data: unknown): Promise<{ ok: boolean; filename: string }> {

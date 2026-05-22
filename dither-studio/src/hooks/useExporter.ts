@@ -1,9 +1,17 @@
 import type React from 'react';
 import { CaptionShaderRenderer } from '../lib/CaptionShaderRenderer';
 import type { AudioSource, AudioBands } from '../lib/AudioSource';
-import type { BackgroundRenderer } from '../lib/BackgroundRenderer';
-import type { VideoRenderer } from '../lib/VideoRenderer';
-import type { ExportParams, CaptionStyle, CaptionShaderParams, AudioReactivityParams } from '../lib/types';
+import { BackgroundRenderer } from '../lib/BackgroundRenderer';
+import { VideoRenderer } from '../lib/VideoRenderer';
+import type {
+  ExportParams,
+  CaptionStyle,
+  CaptionShaderParams,
+  AudioReactivityParams,
+  BackgroundParams,
+  DitherParams,
+  VideoShaderParams,
+} from '../lib/types';
 import type { CaptionMode, TranscriptData } from '../lib/transcript';
 import type { ProjectTaskStatus } from '../lib/constants';
 import { GUIDES } from '../lib/constants';
@@ -30,6 +38,9 @@ export interface ExporterRefs {
 }
 
 export interface ExporterState {
+  bg: BackgroundParams;
+  bgDither: DitherParams;
+  vid: VideoShaderParams;
   bgLayerOn: boolean;
   bgOffMode: 'grid' | 'color';
   bgOffColor: string;
@@ -67,7 +78,7 @@ export function createExportComposition(
     signal: AbortSignal,
   ) => {
     const { activeProjectIdRef, bgRendererRef, videoRendererRef, videoElRef, audioElRef, audioSourceRef, activeExportParamsRef, exportingRef, startRef, jumpCutGapListRef } = refs;
-    const { bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, jumpCutsEnabled, audioReactivity, captionMode, captionStyle, captionShader, transcript, videoInfo, audioInfo, cropToGuide, activeGuide, availableGuides, previewFrame } = state;
+    const { bg, bgDither, vid, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, jumpCutsEnabled, audioReactivity, captionMode, captionStyle, captionShader, transcript, videoInfo, audioInfo, cropToGuide, activeGuide, availableGuides, previewFrame } = state;
     const { setPlaying, setProjectStatus, addToast, updateToast, fitPreviewBack } = callbacks;
 
     const projectId = activeProjectIdRef.current;
@@ -81,8 +92,6 @@ export function createExportComposition(
       }
     };
 
-    const bgRenderer = bgRendererRef.current;
-    const videoRenderer = videoRendererRef.current;
     const video = videoElRef.current;
     const audio = audioSourceRef.current;
     const params = activeExportParamsRef.current;
@@ -90,7 +99,7 @@ export function createExportComposition(
     const sourceDuration = videoInfo?.duration ?? audioInfo?.duration ?? null;
     const range = resolveExportRange(params, sourceDuration);
     const exportBaseName = buildExportBaseName(params.filenamePrefix, range.start, range.end);
-    if (videoLayerOn && (!videoRenderer || !video)) throw new Error('Load a video before exporting the video layer.');
+    if (videoLayerOn && !video) throw new Error('Load a video before exporting the video layer.');
 
     // Pre-compute deterministic per-frame audio bands when audio is loaded.
     if (audio && audioReactivity.enabled) {
@@ -101,6 +110,7 @@ export function createExportComposition(
     const width = activeGuideObj ? activeGuideObj.w : Math.max(1, Math.floor(params.width));
     const height = activeGuideObj ? activeGuideObj.h : Math.max(1, Math.floor(params.height));
     const preserveAlpha = exportMode === 'web' && !bgLayerOn;
+    const renderFrame = resolveLayerRenderFrame(width, height, videoInfo, activeGuideObj);
 
     // Compute "kept segments" for jump-cut silence skipping during export.
     type KeptSegment = { srcStart: number; srcEnd: number; outStart: number };
@@ -150,6 +160,19 @@ export function createExportComposition(
     canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Could not create export canvas.');
+    const invertCanvas = params.invertFinalOutput ? document.createElement('canvas') : null;
+    const invertCtx = invertCanvas?.getContext('2d') ?? null;
+    if (invertCanvas) {
+      invertCanvas.width = width;
+      invertCanvas.height = height;
+    }
+    const bgRenderer = bgLayerOn
+      ? new BackgroundRenderer(document.createElement('canvas'), bg, bgDither)
+      : null;
+    const videoRenderer = videoLayerOn
+      ? new VideoRenderer(document.createElement('canvas'), vid)
+      : null;
+    videoRenderer?.setVideo(video);
 
     const capRenderer = (captionsLayerOn && captionShader.enabled) ? new CaptionShaderRenderer(document.createElement('canvas')) : null;
     const capOffscreen = capRenderer ? document.createElement('canvas') : null;
@@ -165,8 +188,8 @@ export function createExportComposition(
     const toastId = addToast('Creating project export folder…', 'progress', true);
 
     try {
-      bgRenderer?.setSize(width, height);
-      videoRenderer?.setSize(width, height);
+      bgRenderer?.setSize(renderFrame.w, renderFrame.h);
+      videoRenderer?.setSize(renderFrame.w, renderFrame.h);
       const created = await createProjectExport(projectId, {
         prefix: exportBaseName,
         width,
@@ -214,7 +237,14 @@ export function createExportComposition(
             brightness: bands.rms * g * audioReactivity.modBrightness,
           } : { speed: 0, brightness: 0 });
           bgRenderer.renderFrame(tOut);
-          ctx.drawImage(bgRenderer.renderer.domElement as HTMLCanvasElement, 0, 0, width, height);
+          drawLayerToExportCanvas(ctx, bgRenderer.renderer.domElement as HTMLCanvasElement, renderFrame, width, height);
+          if (bgRendererRef.current) {
+            bgRendererRef.current.setModulation(audio && audioReactivity.enabled ? {
+              speed: bands.rms * g * audioReactivity.modSpeed * 1.5,
+              brightness: bands.rms * g * audioReactivity.modBrightness,
+            } : { speed: 0, brightness: 0 });
+            bgRendererRef.current.renderFrame(tOut);
+          }
         }
 
         if (videoLayerOn && videoRenderer && video) {
@@ -223,7 +253,10 @@ export function createExportComposition(
             await seekVideoTo(video, tVideo);
             throwIfAborted();
             videoRenderer.renderFrame(tVideo);
-            ctx.drawImage(videoRenderer.renderer.domElement as HTMLCanvasElement, 0, 0, width, height);
+            drawLayerToExportCanvas(ctx, videoRenderer.renderer.domElement as HTMLCanvasElement, renderFrame, width, height);
+            if (videoRendererRef.current) {
+              videoRendererRef.current.renderFrame(tVideo, tVideo);
+            }
           }
         }
 
@@ -274,6 +307,10 @@ export function createExportComposition(
           ctx.fill();
         }
 
+        if (params.invertFinalOutput) {
+          applyFinalInvertPass(canvas, ctx, invertCanvas, invertCtx, width, height);
+        }
+
         const blob = await canvasToPngBlob(canvas);
         throwIfAborted();
         await uploadExportFrame(projectId, created.exportId, `${exportBaseName}_${frameNumber(i)}.png`, blob);
@@ -306,10 +343,79 @@ export function createExportComposition(
       }
       throw error;
     } finally {
+      bgRenderer?.dispose();
+      videoRenderer?.dispose();
       capRenderer?.dispose();
       fitPreviewBack();
       startRef.current = performance.now();
       exportingRef.current = false;
     }
   };
+}
+
+function applyFinalInvertPass(
+  sourceCanvas: HTMLCanvasElement,
+  sourceCtx: CanvasRenderingContext2D,
+  invertCanvas: HTMLCanvasElement | null,
+  invertCtx: CanvasRenderingContext2D | null,
+  width: number,
+  height: number,
+) {
+  if (!invertCanvas || !invertCtx) return;
+  invertCtx.save();
+  invertCtx.clearRect(0, 0, width, height);
+  invertCtx.filter = 'invert(1)';
+  invertCtx.drawImage(sourceCanvas, 0, 0, width, height);
+  invertCtx.restore();
+
+  sourceCtx.clearRect(0, 0, width, height);
+  sourceCtx.drawImage(invertCanvas, 0, 0, width, height);
+}
+
+function resolveLayerRenderFrame(
+  width: number,
+  height: number,
+  videoInfo: { w: number; h: number } | null,
+  guide: { w: number; h: number } | null,
+) {
+  if (!videoInfo || !guide) {
+    return { w: width, h: height, crop: null as null | { x: number; y: number; w: number; h: number } };
+  }
+
+  const sourceAspect = videoInfo.w / Math.max(1, videoInfo.h);
+  const guideAspect = guide.w / guide.h;
+  let renderWidth = width;
+  let renderHeight = height;
+
+  if (sourceAspect >= guideAspect) {
+    renderHeight = height;
+    renderWidth = Math.max(width, Math.ceil(renderHeight * sourceAspect));
+  } else {
+    renderWidth = width;
+    renderHeight = Math.max(height, Math.ceil(renderWidth / sourceAspect));
+  }
+
+  const crop = guideRectInVideoFrame(
+    { x: 0, y: 0, w: renderWidth, h: renderHeight },
+    videoInfo,
+    guide,
+  );
+
+  return { w: renderWidth, h: renderHeight, crop };
+}
+
+function drawLayerToExportCanvas(
+  ctx: CanvasRenderingContext2D,
+  source: HTMLCanvasElement,
+  renderFrame: { w: number; h: number; crop: null | { x: number; y: number; w: number; h: number } },
+  width: number,
+  height: number,
+) {
+  if (!renderFrame.crop) {
+    ctx.drawImage(source, 0, 0, width, height);
+    return;
+  }
+
+  const { x, y, w, h } = renderFrame.crop;
+  ctx.drawImage(source, x, y, w, h, 0, 0, width, height);
 }

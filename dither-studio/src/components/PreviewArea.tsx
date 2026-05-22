@@ -49,12 +49,16 @@ export const PreviewArea: React.FC<Props> = ({
   captionMode, captionStyle, captionShader,
   mediaElRef, playheadSecond, playbackStartMs,
   activeExportParams, toasts, onDismissToast, onDrop,
-}) => (
+}) => {
+  const finalOutputFilter = activeExportParams.invertFinalOutput ? 'invert(1)' : 'none';
+  return (
   <div
     ref={previewWrapRef}
     style={{
       position: 'relative',
       flex: 1,
+      width: '100%',
+      height: '100%',
       background: bgLayerOn
         ? '#000'
         : bgOffMode === 'color'
@@ -64,14 +68,67 @@ export const PreviewArea: React.FC<Props> = ({
       minHeight: 0,
     }}
   >
-    <canvas
-      ref={bgCanvasRef}
-      style={{ ...frameStyle, display: bgLayerOn ? 'block' : 'none' }}
-    />
-    <canvas
-      ref={videoCanvasRef}
-      style={{ ...frameStyle, display: videoLayerOn && !audioMode ? 'block' : 'none' }}
-    />
+    <div style={{ position: 'absolute', inset: 0, filter: finalOutputFilter }}>
+      <canvas
+        ref={bgCanvasRef}
+        style={{ ...frameStyle, display: bgLayerOn ? 'block' : 'none' }}
+      />
+      <canvas
+        ref={videoCanvasRef}
+        style={{ ...frameStyle, display: videoLayerOn && !audioMode ? 'block' : 'none' }}
+      />
+
+      {/* captions overlay */}
+      {captionsLayerOn && transcript && (() => {
+        const guide = cropToGuide
+          ? availableGuides.find((g) => g.key === activeGuide)
+          : undefined;
+        const captionFrame = guide
+          ? guideRectInVideoFrame(previewFrame, videoInfo, guide)
+          : previewFrame;
+
+        let capOpacity = 1;
+        const { end, outroDuration } = resolveExportRange(activeExportParams, videoInfo?.duration ?? audioInfo?.duration ?? null);
+        if (outroDuration > 0 && playheadSecond > end) {
+          const outroElapsed = playheadSecond - end;
+          const fadeTargetSec = 3;
+          capOpacity = Math.max(0, 1 - outroElapsed / fadeTargetSec);
+        }
+
+        return (
+          <ShaderCaptions
+            transcript={transcript}
+            mode={captionMode}
+            style={captionStyle}
+            frame={captionFrame}
+            timeSourceRef={mediaElRef}
+            shader={captionShader}
+            playhead={playheadSecond}
+            opacity={capOpacity}
+            playbackStartMs={playbackStartMs}
+          />
+        );
+      })()}
+
+      {/* outro transition overlay */}
+      {activeExportParams.outroEnabled && (() => {
+        const { end, outroDuration } = resolveExportRange(activeExportParams, videoInfo?.duration ?? audioInfo?.duration ?? null);
+        const guide = cropToGuide
+          ? availableGuides.find((g) => g.key === activeGuide)
+          : undefined;
+        const overlayFrame = guide && videoInfo
+          ? guideRectInVideoFrame(previewFrame, videoInfo, guide)
+          : previewFrame;
+        return (
+          <OutroOverlay
+            frame={overlayFrame}
+            playhead={playheadSecond}
+            outroStart={end}
+            outroDuration={outroDuration}
+          />
+        );
+      })()}
+    </div>
 
     {!audioMode && videoLayerOn && (
       <GradientGuideOverlay
@@ -120,57 +177,6 @@ export const PreviewArea: React.FC<Props> = ({
       );
     })()}
 
-    {/* captions overlay */}
-    {captionsLayerOn && transcript && (() => {
-      const guide = cropToGuide
-        ? availableGuides.find((g) => g.key === activeGuide)
-        : undefined;
-      const captionFrame = guide
-        ? guideRectInVideoFrame(previewFrame, videoInfo, guide)
-        : previewFrame;
-
-      let capOpacity = 1;
-      const { end, outroDuration } = resolveExportRange(activeExportParams, videoInfo?.duration ?? audioInfo?.duration ?? null);
-      if (outroDuration > 0 && playheadSecond > end) {
-        const outroElapsed = playheadSecond - end;
-        const fadeTargetSec = 3;
-        capOpacity = Math.max(0, 1 - outroElapsed / fadeTargetSec);
-      }
-
-      return (
-        <ShaderCaptions
-          transcript={transcript}
-          mode={captionMode}
-          style={captionStyle}
-          frame={captionFrame}
-          timeSourceRef={mediaElRef}
-          shader={captionShader}
-          playhead={playheadSecond}
-          opacity={capOpacity}
-          playbackStartMs={playbackStartMs}
-        />
-      );
-    })()}
-
-    {/* outro transition overlay */}
-    {activeExportParams.outroEnabled && (() => {
-      const { end, outroDuration } = resolveExportRange(activeExportParams, videoInfo?.duration ?? audioInfo?.duration ?? null);
-      const guide = cropToGuide
-        ? availableGuides.find((g) => g.key === activeGuide)
-        : undefined;
-      const overlayFrame = guide && videoInfo
-        ? guideRectInVideoFrame(previewFrame, videoInfo, guide)
-        : previewFrame;
-      return (
-        <OutroOverlay
-          frame={overlayFrame}
-          playhead={playheadSecond}
-          outroStart={end}
-          outroDuration={outroDuration}
-        />
-      );
-    })()}
-
     {/* status toasts */}
     <StatusToast toasts={toasts} onDismiss={onDismissToast} />
 
@@ -190,4 +196,5 @@ export const PreviewArea: React.FC<Props> = ({
       </div>
     )}
   </div>
-);
+  );
+};

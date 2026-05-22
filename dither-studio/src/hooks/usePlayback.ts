@@ -63,8 +63,9 @@ export function createTogglePlay(refs: PlaybackRefs, state: PlaybackState, sette
       let target = cur;
       const clip = selectedClip;
       if (clip) {
-        if (cur >= clip.endSecond - 0.001) target = clip.startSecond;
-        playingInClipRef.current = target >= clip.startSecond && target < clip.endSecond;
+        const insideClip = cur >= clip.startSecond && cur < clip.endSecond - 0.001;
+        target = insideClip ? cur : clip.startSecond;
+        playingInClipRef.current = true;
       } else {
         playingInClipRef.current = false;
         if (cur >= totalDuration - 0.001) target = 0;
@@ -117,6 +118,7 @@ export function createHandleSeekPlayhead(refs: PlaybackRefs, state: PlaybackStat
  */
 export function usePlaybackKeyboard(
   mediaElRef: React.MutableRefObject<HTMLMediaElement | null>,
+  previewWrapRef: React.MutableRefObject<HTMLDivElement | null>,
   togglePlayRef: React.MutableRefObject<() => void>,
   setMuted: React.Dispatch<React.SetStateAction<boolean>>,
 ) {
@@ -139,9 +141,18 @@ export function usePlaybackKeyboard(
         if (!mediaElRef.current) return;
         e.preventDefault();
         setMuted((m) => !m);
+      } else if (e.key === 'f' || e.key === 'F') {
+        const preview = previewWrapRef.current;
+        if (!preview) return;
+        e.preventDefault();
+        if (document.fullscreenElement === preview) {
+          void document.exitFullscreen();
+        } else if (!document.fullscreenElement) {
+          void preview.requestFullscreen();
+        }
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mediaElRef, togglePlayRef, setMuted]);
+  }, [mediaElRef, previewWrapRef, togglePlayRef, setMuted]);
 }

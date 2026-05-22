@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Row, Section, Slider } from './Controls';
+import { Row, Section, Slider, Toggle } from './Controls';
 import type { ExportParams } from '../lib/types';
 import { buildExportBaseName } from '../lib/exporter';
 
@@ -112,10 +112,16 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
               cursor: 'pointer',
             }}
           >
-            web alpha
+            web
           </button>
         </div>
       </Row>
+
+      <Toggle
+        label="invert final output"
+        value={!!params.invertFinalOutput}
+        onChange={(v) => set({ invertFinalOutput: v })}
+      />
 
       <Row label="prefix">
         <input
@@ -138,8 +144,13 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
       <div style={{ marginTop: 4, color: '#666', fontSize: 11, lineHeight: 1.4 }}>
         {exportMode === 'master'
           ? 'Master mode keeps the high-fidelity stitch path for editing / archival outputs.'
-          : 'Web alpha mode preserves transparency and stitches to a compressed web delivery format.'}
+          : 'Web mode targets upload-friendly delivery sizes. If the background layer is off, it preserves alpha and exports a transparent web format.'}
       </div>
+      {params.invertFinalOutput && (
+        <div style={{ marginTop: 4, color: '#777', fontSize: 11, lineHeight: 1.4 }}>
+          Final invert is on. Preview and export both apply the inversion after all layers are composited.
+        </div>
+      )}
       {layerSummary && <div style={{ marginTop: 4, color: '#777', lineHeight: 1.4 }}>Layers: {layerSummary}</div>}
       {clipName && <div style={{ marginTop: 4, color: '#1f6feb', fontSize: 11 }}>Exporting: {clipName}</div>}
 

@@ -202,6 +202,7 @@ export interface ExportParams {
   duration: number;        // seconds (background) — fallback when endSecond is absent
   filenamePrefix: string;
   exportMode?: 'master' | 'web';
+  invertFinalOutput?: boolean;
   startSecond: number;     // start time offset (seconds)
   endSecond?: number;      // end time (seconds) — when absent, uses startSecond + duration
   outroEnabled?: boolean;  // 5s frozen-frame outro
@@ -258,6 +259,12 @@ export interface CaptionStyle {
   lineTargetWords: number;
   color: string;
   dimColor: string;
+  /** Opacity (0..1) applied to `color` (active / highlighted state). */
+  colorOpacity?: number;
+  /** Opacity (0..1) applied to `dimColor` (non-active state). */
+  dimColorOpacity?: number;
+  /** Drop-shadow behind caption text. Default `true` keeps the legacy look. */
+  shadowEnabled?: boolean;
 }
 
 // Defaults match the DARK_PRESET used by w3rk17 (src/lib/three-presets.ts)
@@ -451,6 +458,7 @@ export const DEFAULT_EXPORT: ExportParams = {
   duration: 10,
   filenamePrefix: 'dither',
   exportMode: 'master',
+  invertFinalOutput: false,
   startSecond: 0,
   endSecond: 10,
   outroEnabled: false,
@@ -511,5 +519,8 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   lineMaxSeconds: 3,
   lineTargetWords: 6,
   color: '#ffffff',
-  dimColor: 'rgba(255,255,255,0.5)',
+  dimColor: '#ffffff',
+  colorOpacity: 1,
+  dimColorOpacity: 0.5,
+  shadowEnabled: true,
 };

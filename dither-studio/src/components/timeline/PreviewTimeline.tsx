@@ -194,8 +194,15 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   };
 
   const visPlay = secToPct(playhead);
+  const playheadVisible = visPlay >= 0 && visPlay <= 100;
 
   const onTrackDown: React.PointerEventHandler<HTMLDivElement> = (e) => {
+    onSelectGap?.(null);
+    onPlayheadChange(timeAtClientX(e.clientX));
+    startDrag('play')(e);
+  };
+
+  const onPlayheadHandleDown: React.PointerEventHandler<HTMLDivElement> = (e) => {
     onSelectGap?.(null);
     onPlayheadChange(timeAtClientX(e.clientX));
     startDrag('play')(e);
@@ -230,6 +237,38 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
         </span>
       </div>
 
+      <div
+        onPointerDown={onTrackDown}
+        style={{
+          position: 'relative',
+          height: 18,
+          background: '#0f0f0f',
+          border: '1px solid #202020',
+          borderRadius: 4,
+          userSelect: 'none',
+          cursor: 'ew-resize',
+        }}
+      >
+        {playheadVisible && (
+          <div
+            onPointerDown={onPlayheadHandleDown}
+            title={`Playhead ${fmt(playhead)} — drag to scrub`}
+            style={{
+              position: 'absolute',
+              left: `calc(${visPlay}% - 8px)`,
+              top: 1,
+              width: 16,
+              height: 14,
+              borderRadius: 999,
+              background: '#ffffff',
+              boxShadow: '0 0 8px rgba(255,255,255,0.45)',
+              cursor: 'grab',
+              zIndex: 8,
+            }}
+          />
+        )}
+      </div>
+
       {/* range track */}
       <div
         ref={trackRef}
@@ -254,8 +293,8 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
           startDrag={startDrag}
         />
 
-        {/* skip-silence gaps — always visible when showSilence/showFiller toggles are on; skipGapsEnabled only controls playback */}
-        {skipGaps.length > 0 && (
+        {/* skip-silence gaps */}
+        {skipGapsEnabled && skipGaps.length > 0 && (
           <SkipGapOverlay
             skipGaps={skipGaps}
             skipGapsEffective={skipGapsEffective}
@@ -275,10 +314,10 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
         )}
 
         {/* playhead */}
-        {visPlay >= 0 && visPlay <= 100 && (
+        {playheadVisible && (
           <div style={{
             position: 'absolute', left: `calc(${visPlay}% - 1px)`,
-            top: -3, bottom: -3, width: 2,
+            top: -20, bottom: -3, width: 2,
             background: '#fff', boxShadow: '0 0 4px rgba(255,255,255,0.7)',
             pointerEvents: 'none', zIndex: 5,
           }} />

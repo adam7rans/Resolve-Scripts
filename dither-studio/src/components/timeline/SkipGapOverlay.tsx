@@ -86,7 +86,7 @@ export const SkipGapOverlay: React.FC<Props> = ({
               position: 'absolute',
               left: `${l}%`,
               width: `${r - l}%`,
-              top: 4, bottom: 4,
+              top: '25%', bottom: '25%',
               background: isCustom
                 ? `repeating-linear-gradient(-45deg, rgba(${stripeColor},${baseAlpha}) 0 3px, rgba(8,20,8,${isDisabled ? 0.3 : 0.55}) 3px 6px)`
                 : `repeating-linear-gradient(45deg, rgba(${stripeColor},${baseAlpha}) 0 4px, rgba(20,12,0,${isDisabled ? 0.3 : 0.55}) 4px 8px)`,
@@ -110,7 +110,7 @@ export const SkipGapOverlay: React.FC<Props> = ({
                 style={{
                   position: 'absolute',
                   left: `calc(${l}% - 3px)`,
-                  top: 2, bottom: 2, width: 6,
+                  top: '20%', bottom: '20%', width: 6,
                   background: handleColor,
                   borderRadius: 2,
                   cursor: 'ew-resize',
@@ -125,7 +125,7 @@ export const SkipGapOverlay: React.FC<Props> = ({
                 style={{
                   position: 'absolute',
                   left: `calc(${r}% - 3px)`,
-                  top: 2, bottom: 2, width: 6,
+                  top: '20%', bottom: '20%', width: 6,
                   background: handleColor,
                   borderRadius: 2,
                   cursor: 'ew-resize',
@@ -158,7 +158,7 @@ export const SkipGapOverlay: React.FC<Props> = ({
             position: 'absolute',
             left: `${l}%`,
             width: `${r - l}%`,
-            top: '30%', bottom: '30%',
+            top: '35%', bottom: '35%',
             background: `rgba(${stripeColor},0.55)`,
             borderRadius: 2,
             pointerEvents: 'none',

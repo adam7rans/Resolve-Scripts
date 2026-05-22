@@ -1,121 +1,226 @@
-import React, { useState } from 'react';
-import { getProject, type ProjectMeta } from '../lib/projectApi';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  DEFAULT_CAPTION_STYLE, DEFAULT_CAPTION_SHADER,
-  normalizeVideoShaderParams,
-  type BackgroundParams, type DitherParams, type VideoShaderParams,
-  type CaptionStyle, type CaptionShaderParams,
-} from '../lib/types';
-import { DEFAULT_LIMITER, type LimiterParams } from '../lib/AudioSource';
-import { DEFAULT_MUSIC_PARAMS, type MusicParams } from '../lib/MusicPlayer';
-import type { CaptionMode } from '../lib/transcript';
+  createPreset,
+  getPreset,
+  getProject,
+  listPresets,
+  type PresetMeta,
+  type ProjectMeta,
+} from '../lib/projectApi';
 import { Section } from './Controls';
 
 export interface ImportPresetProps {
   projects: ProjectMeta[];
   activeProjectId: string | null;
-  setBg: React.Dispatch<React.SetStateAction<BackgroundParams>>;
-  setBgDither: React.Dispatch<React.SetStateAction<DitherParams>>;
-  setVid: React.Dispatch<React.SetStateAction<VideoShaderParams>>;
-  setCaptionMode: React.Dispatch<React.SetStateAction<CaptionMode>>;
-  setCaptionStyle: React.Dispatch<React.SetStateAction<CaptionStyle>>;
-  setCaptionShader: React.Dispatch<React.SetStateAction<CaptionShaderParams>>;
-  setLimiter: React.Dispatch<React.SetStateAction<LimiterParams>>;
-  setMusic: React.Dispatch<React.SetStateAction<MusicParams>>;
+  currentSettings: Record<string, any>;
+  onApplySettings: (data: Record<string, any>) => void;
   addToast: (message: string, type?: 'info' | 'success' | 'error') => number;
 }
 
 export const ImportPresetPanel: React.FC<ImportPresetProps> = ({
-  projects, activeProjectId,
-  setBg, setBgDither, setVid,
-  setCaptionMode, setCaptionStyle, setCaptionShader,
-  setLimiter, setMusic, addToast,
+  projects,
+  activeProjectId,
+  currentSettings,
+  onApplySettings,
+  addToast,
 }) => {
-  const [sourceId, setSourceId] = useState('');
-  const [importing, setImporting] = useState(false);
+  const [sourceProjectId, setSourceProjectId] = useState('');
+  const [presetId, setPresetId] = useState('');
+  const [presetName, setPresetName] = useState('');
+  const [importingProject, setImportingProject] = useState(false);
+  const [importingPreset, setImportingPreset] = useState(false);
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [presets, setPresets] = useState<PresetMeta[]>([]);
 
-  const otherProjects = projects.filter(p => p.id !== activeProjectId);
+  const otherProjects = useMemo(
+    () => projects.filter((p) => p.id !== activeProjectId),
+    [projects, activeProjectId],
+  );
 
-  const handleImport = async () => {
-    if (!sourceId) return;
-    setImporting(true);
+  useEffect(() => {
+    listPresets().then(setPresets).catch(() => {});
+  }, []);
+
+  const handleImportProject = async () => {
+    if (!sourceProjectId) return;
+    setImportingProject(true);
     try {
-      const proj = await getProject(sourceId);
-
-      // Background: noise params + dither
-      if (proj.background) setBg(proj.background);
-      if (proj.backgroundDither) setBgDither(proj.backgroundDither);
-
-      // Video shader: levels, tone, color, distort, dither
-      if (proj.video) setVid(normalizeVideoShaderParams(proj.video));
-
-      // Captions: mode, font/style, shader
-      if (proj.captionMode) setCaptionMode(proj.captionMode);
-      if (proj.captionStyle) setCaptionStyle({ ...DEFAULT_CAPTION_STYLE, ...proj.captionStyle });
-      if (proj.captionShader) setCaptionShader({ ...DEFAULT_CAPTION_SHADER, ...proj.captionShader });
-
-      // Audio: limiter + sidechain ducking (preserve current volume/mute)
-      if (proj.limiter) setLimiter({ ...DEFAULT_LIMITER, ...proj.limiter });
-      if (proj.music?.sidechain) {
-        setMusic(prev => ({
-          ...prev,
-          sidechain: { ...DEFAULT_MUSIC_PARAMS.sidechain, ...proj.music.sidechain },
-        }));
-      }
-
-      const sourceName = otherProjects.find(p => p.id === sourceId)?.name ?? sourceId;
+      const proj = await getProject(sourceProjectId);
+      onApplySettings(proj);
+      const sourceName = otherProjects.find((p) => p.id === sourceProjectId)?.name ?? sourceProjectId;
       addToast(`Imported settings from "${sourceName}"`, 'success');
     } catch {
-      addToast('Failed to import settings', 'error');
+      addToast('Failed to import project settings', 'error');
     } finally {
-      setImporting(false);
+      setImportingProject(false);
     }
   };
 
-  if (!activeProjectId || otherProjects.length === 0) return null;
+  const handleImportPreset = async () => {
+    if (!presetId) return;
+    setImportingPreset(true);
+    try {
+      const preset = await getPreset(presetId);
+      onApplySettings(preset);
+      const sourceName = presets.find((p) => p.id === presetId)?.name ?? presetId;
+      addToast(`Applied preset "${sourceName}"`, 'success');
+    } catch {
+      addToast('Failed to apply preset', 'error');
+    } finally {
+      setImportingPreset(false);
+    }
+  };
+
+  const handleSavePreset = async () => {
+    const name = presetName.trim();
+    if (!name) return;
+    setSavingPreset(true);
+    try {
+      const created = await createPreset(name, currentSettings);
+      const next = await listPresets();
+      setPresets(next);
+      setPresetId(created.id);
+      setPresetName('');
+      addToast(`Saved preset "${created.name}"`, 'success');
+    } catch {
+      addToast('Failed to save preset', 'error');
+    } finally {
+      setSavingPreset(false);
+    }
+  };
+
+  if (!activeProjectId) return null;
 
   return (
-    <Section title="Import Preset">
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        <select
-          value={sourceId}
-          onChange={e => setSourceId(e.target.value)}
-          style={{
-            flex: 1,
-            background: '#0a0a0a',
-            color: '#ddd',
-            border: '1px solid #333',
-            padding: '4px 6px',
-            borderRadius: 3,
-            fontFamily: 'inherit',
-            fontSize: 12,
-          }}
-        >
-          <option value="">Select project...</option>
-          {otherProjects.map(p => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-        <button
-          onClick={handleImport}
-          disabled={!sourceId || importing}
-          style={{
-            padding: '4px 12px',
-            background: sourceId && !importing ? '#1f6feb' : '#222',
-            color: sourceId && !importing ? '#fff' : '#666',
-            border: 'none',
-            borderRadius: 3,
-            cursor: sourceId && !importing ? 'pointer' : 'not-allowed',
-            fontFamily: 'inherit',
-            fontSize: 12,
-            flexShrink: 0,
-          }}
-        >
-          {importing ? 'Importing...' : 'Import'}
-        </button>
+    <Section title="Presets">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div>
+          <div style={{ color: '#888', fontSize: 11, marginBottom: 4 }}>Save preset</div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input
+              type="text"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              placeholder="Preset name..."
+              style={{
+                flex: 1,
+                background: '#0a0a0a',
+                color: '#ddd',
+                border: '1px solid #333',
+                padding: '4px 6px',
+                borderRadius: 3,
+                fontFamily: 'inherit',
+                fontSize: 12,
+              }}
+            />
+            <button
+              onClick={handleSavePreset}
+              disabled={!presetName.trim() || savingPreset}
+              style={{
+                padding: '4px 12px',
+                background: presetName.trim() && !savingPreset ? '#1f6feb' : '#222',
+                color: presetName.trim() && !savingPreset ? '#fff' : '#666',
+                border: 'none',
+                borderRadius: 3,
+                cursor: presetName.trim() && !savingPreset ? 'pointer' : 'not-allowed',
+                fontFamily: 'inherit',
+                fontSize: 12,
+                flexShrink: 0,
+              }}
+            >
+              {savingPreset ? 'Saving...' : 'Save Preset'}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ color: '#888', fontSize: 11, marginBottom: 4 }}>Apply saved preset</div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <select
+              value={presetId}
+              onChange={(e) => setPresetId(e.target.value)}
+              style={{
+                flex: 1,
+                background: '#0a0a0a',
+                color: '#ddd',
+                border: '1px solid #333',
+                padding: '4px 6px',
+                borderRadius: 3,
+                fontFamily: 'inherit',
+                fontSize: 12,
+              }}
+            >
+              <option value="">Select preset...</option>
+              {presets.map((preset) => (
+                <option key={preset.id} value={preset.id}>{preset.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleImportPreset}
+              disabled={!presetId || importingPreset}
+              style={{
+                padding: '4px 12px',
+                background: presetId && !importingPreset ? '#1f6feb' : '#222',
+                color: presetId && !importingPreset ? '#fff' : '#666',
+                border: 'none',
+                borderRadius: 3,
+                cursor: presetId && !importingPreset ? 'pointer' : 'not-allowed',
+                fontFamily: 'inherit',
+                fontSize: 12,
+                flexShrink: 0,
+              }}
+            >
+              {importingPreset ? 'Applying...' : 'Apply'}
+            </button>
+          </div>
+        </div>
+
+        {otherProjects.length > 0 && (
+          <div>
+            <div style={{ color: '#888', fontSize: 11, marginBottom: 4 }}>Import from project</div>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <select
+                value={sourceProjectId}
+                onChange={(e) => setSourceProjectId(e.target.value)}
+                style={{
+                  flex: 1,
+                  background: '#0a0a0a',
+                  color: '#ddd',
+                  border: '1px solid #333',
+                  padding: '4px 6px',
+                  borderRadius: 3,
+                  fontFamily: 'inherit',
+                  fontSize: 12,
+                }}
+              >
+                <option value="">Select project...</option>
+                {otherProjects.map((project) => (
+                  <option key={project.id} value={project.id}>{project.name}</option>
+                ))}
+              </select>
+              <button
+                onClick={handleImportProject}
+                disabled={!sourceProjectId || importingProject}
+                style={{
+                  padding: '4px 12px',
+                  background: sourceProjectId && !importingProject ? '#1f6feb' : '#222',
+                  color: sourceProjectId && !importingProject ? '#fff' : '#666',
+                  border: 'none',
+                  borderRadius: 3,
+                  cursor: sourceProjectId && !importingProject ? 'pointer' : 'not-allowed',
+                  fontFamily: 'inherit',
+                  fontSize: 12,
+                  flexShrink: 0,
+                }}
+              >
+                {importingProject ? 'Importing...' : 'Import'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
-      <div style={{ color: '#555', fontSize: 11, marginTop: 4, lineHeight: 1.4 }}>
-        Applies background, video, caption, and audio settings from another project.
+      <div style={{ color: '#555', fontSize: 11, marginTop: 6, lineHeight: 1.4 }}>
+        Saves and reapplies the current background, video, caption, audio-reactivity, layer, guide, and export settings.
       </div>
     </Section>
   );

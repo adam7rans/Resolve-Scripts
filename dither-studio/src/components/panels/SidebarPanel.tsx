@@ -6,6 +6,8 @@ import type {
   CaptionStyle, AudioReactivityParams, CaptionShaderParams,
 } from '../../lib/types';
 import type { CaptionMode, TranscriptData } from '../../lib/transcript';
+import type { CustomCut } from '../../lib/fillerDetector';
+import { detectFillerCuts } from '../../lib/fillerDetector';
 import type {
   MainTab, BgSubTab, VideoSubTab, AudioSubTab, CaptionsSubTab,
   ProjectTaskStatus, GuideKey,
@@ -50,6 +52,15 @@ interface Props {
   setJumpCutGapMs: React.Dispatch<React.SetStateAction<number>>;
   jumpCutPaddingMs: number;
   setJumpCutPaddingMs: React.Dispatch<React.SetStateAction<number>>;
+  customCuts: CustomCut[];
+  customCutPaddingMs: number;
+  setCustomCutPaddingMs: React.Dispatch<React.SetStateAction<number>>;
+  showSilenceGaps: boolean;
+  setShowSilenceGaps: React.Dispatch<React.SetStateAction<boolean>>;
+  showFillerCuts: boolean;
+  setShowFillerCuts: React.Dispatch<React.SetStateAction<boolean>>;
+  onAddCustomCuts: (cuts: CustomCut[]) => void;
+  onClearCustomCuts: () => void;
   // layers
   bgLayerOn: boolean;
   setBgLayerOn: React.Dispatch<React.SetStateAction<boolean>>;
@@ -85,6 +96,7 @@ interface Props {
   videoSubTab: VideoSubTab;
   setVideoSubTab: React.Dispatch<React.SetStateAction<VideoSubTab>>;
   onPickFile: React.ChangeEventHandler<HTMLInputElement>;
+  onImportNativeMedia: () => void;
   // captions tab
   captionsSubTab: CaptionsSubTab;
   setCaptionsSubTab: React.Dispatch<React.SetStateAction<CaptionsSubTab>>;
@@ -122,6 +134,8 @@ interface Props {
   exportComposition: (onProgress: (done: number, total: number) => void, signal: AbortSignal) => Promise<string>;
   exportLayerSummary: string;
   selectedClipName: string | undefined;
+  currentPresetSettings: Record<string, any>;
+  onApplyPresetSettings: (data: Record<string, any>) => void;
   // toasts
   addToast: (message: string, type?: 'info' | 'success' | 'error' | 'progress', sticky?: boolean) => number;
 }
@@ -194,6 +208,23 @@ export const SidebarPanel: React.FC<Props> = (p) => (
           >
             ✂ Skip silence
           </button>
+          <button
+            onClick={() => p.setShowSilenceGaps((v) => !v)}
+            disabled={!p.transcript || !p.jumpCutsEnabled}
+            title={p.showSilenceGaps ? 'Hide silence gaps on timeline' : 'Show silence gaps on timeline'}
+            style={{
+              background: 'transparent',
+              color: !p.transcript || !p.jumpCutsEnabled ? '#333' : p.showSilenceGaps ? 'rgba(255,180,80,0.9)' : '#555',
+              border: 'none',
+              padding: '2px 4px',
+              cursor: !p.transcript || !p.jumpCutsEnabled ? 'not-allowed' : 'pointer',
+              fontSize: 14,
+              flexShrink: 0,
+              lineHeight: 1,
+            }}
+          >
+            {p.showSilenceGaps ? '👁' : '👁‍🗨'}
+          </button>
           <input
             type="number"
             min={50}
@@ -232,6 +263,92 @@ export const SidebarPanel: React.FC<Props> = (p) => (
           />
           <span style={{ color: !p.transcript || !p.jumpCutsEnabled ? '#444' : '#aaa', fontSize: 11, minWidth: 40, textAlign: 'right' }}>
             ±{p.jumpCutPaddingMs}ms
+          </span>
+        </div>
+      )}
+
+      {/* media transport row 3: filler / custom cuts */}
+      {(p.videoInfo || p.audioInfo) && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a' }}>
+          <button
+            onClick={() => {
+              if (!p.transcript) return;
+              const cuts = detectFillerCuts(p.transcript);
+              p.onAddCustomCuts(cuts);
+            }}
+            disabled={!p.transcript}
+            title={
+              !p.transcript
+                ? 'Load a transcript to auto-strip filler'
+                : 'Scan transcript for filler phrases ("you know", "I mean", stutter repeats) and add them as skip ranges'
+            }
+            style={{
+              background: '#1a1a1a',
+              color: !p.transcript ? '#444' : '#ddd',
+              border: '1px solid #2a2a2a',
+              padding: '4px 8px',
+              borderRadius: 3,
+              cursor: !p.transcript ? 'not-allowed' : 'pointer',
+              fontFamily: 'inherit',
+              opacity: !p.transcript ? 0.5 : 1,
+              flexShrink: 0,
+            }}
+          >
+            ✂ Auto-strip filler
+          </button>
+          <button
+            onClick={() => p.setShowFillerCuts((v) => !v)}
+            disabled={!p.jumpCutsEnabled || p.customCuts.length === 0}
+            title={p.showFillerCuts ? 'Hide filler cuts on timeline' : 'Show filler cuts on timeline'}
+            style={{
+              background: 'transparent',
+              color: !p.jumpCutsEnabled || p.customCuts.length === 0 ? '#333' : p.showFillerCuts ? 'rgba(48,209,88,0.9)' : '#555',
+              border: 'none',
+              padding: '2px 4px',
+              cursor: !p.jumpCutsEnabled || p.customCuts.length === 0 ? 'not-allowed' : 'pointer',
+              fontSize: 14,
+              flexShrink: 0,
+              lineHeight: 1,
+            }}
+          >
+            {p.showFillerCuts ? '👁' : '👁‍🗨'}
+          </button>
+          <span style={{ color: '#666', fontSize: 11 }}>
+            {p.customCuts.length > 0 ? `${p.customCuts.length} custom cuts` : 'no custom cuts'}
+          </span>
+          {p.customCuts.length > 0 && (
+            <button
+              onClick={p.onClearCustomCuts}
+              title="Remove all custom cuts (silence skip stays untouched)"
+              style={{
+                background: '#1a1a1a', color: '#aaa', border: '1px solid #2a2a2a',
+                padding: '4px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit',
+                marginLeft: 'auto', flexShrink: 0,
+              }}
+            >
+              Clear cuts
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* media transport row 4: filler tighten slider */}
+      {(p.videoInfo || p.audioInfo) && p.customCuts.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a' }}>
+          <span style={{ color: !p.jumpCutsEnabled ? '#444' : '#777', fontSize: 11, whiteSpace: 'nowrap', flexShrink: 0 }}>Tighten cuts</span>
+          <input
+            type="range"
+            min={0}
+            max={500}
+            step={10}
+            value={p.customCutPaddingMs}
+            onChange={(e) => p.setCustomCutPaddingMs(Number(e.target.value))}
+            disabled={!p.jumpCutsEnabled}
+            title={`Expand each filler/editorial cut by ${p.customCutPaddingMs}ms on each side`}
+            style={{ flex: 1, accentColor: '#30d158', opacity: !p.jumpCutsEnabled ? 0.25 : 1 }}
+          />
+          <span style={{ color: !p.jumpCutsEnabled ? '#444' : '#aaa', fontSize: 11, minWidth: 45, textAlign: 'right' }}>
+            ±{p.customCutPaddingMs}ms
           </span>
         </div>
       )}
@@ -296,7 +413,7 @@ export const SidebarPanel: React.FC<Props> = (p) => (
           vid={p.vid} setVid={p.setVid}
           videoSubTab={p.videoSubTab} setVideoSubTab={p.setVideoSubTab}
           videoInfo={p.videoInfo} audioInfo={p.audioInfo}
-          audioMode={p.audioMode} onPickFile={p.onPickFile}
+          audioMode={p.audioMode} onPickFile={p.onPickFile} onImportNativeMedia={p.onImportNativeMedia}
         />
       )}
 
@@ -367,14 +484,8 @@ export const SidebarPanel: React.FC<Props> = (p) => (
           <ImportPresetPanel
             projects={p.projects}
             activeProjectId={p.activeProjectId}
-            setBg={p.setBg}
-            setBgDither={p.setBgDither}
-            setVid={p.setVid}
-            setCaptionMode={p.setCaptionMode}
-            setCaptionStyle={p.setCaptionStyle}
-            setCaptionShader={p.setCaptionShader}
-            setLimiter={p.setLimiter}
-            setMusic={p.setMusic}
+            currentSettings={p.currentPresetSettings}
+            onApplySettings={p.onApplyPresetSettings}
             addToast={p.addToast}
           />
         </>

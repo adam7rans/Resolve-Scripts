@@ -4,13 +4,13 @@ import { VideoRenderer } from '../lib/VideoRenderer';
 import { AudioSource, type AudioBands, type LimiterParams, DEFAULT_LIMITER } from '../lib/AudioSource';
 import { MusicPlayer, DEFAULT_MUSIC_PARAMS, type MusicParams } from '../lib/MusicPlayer';
 import {
-  DEFAULT_BACKGROUND, DEFAULT_DITHER, DEFAULT_VIDEO, DEFAULT_EXPORT,
+  DEFAULT_BACKGROUND, DEFAULT_DITHER, DEFAULT_VIDEO, DEFAULT_EXPORT, normalizeVideoShaderParams,
   DEFAULT_CAPTION_STYLE, DEFAULT_AUDIO_REACTIVITY, DEFAULT_CAPTION_SHADER,
   type BackgroundParams, type DitherParams, type VideoShaderParams, type ExportParams, type CaptionStyle,
   type AudioReactivityParams, type CaptionShaderParams, type MicroTimeline,
 } from '../lib/types';
 import { PreviewTimeline } from './timeline/PreviewTimeline';
-import { type CaptionMode, type TranscriptData } from '../lib/transcript';
+import { applyClipCaptionEdits, type CaptionMode, type TranscriptData, type ClipCaptionEdits } from '../lib/transcript';
 import {
   type ProjectMeta,
 } from '../lib/projectApi';
@@ -24,7 +24,7 @@ import { useToasts } from '../hooks/useToasts';
 import { useJumpCuts } from '../hooks/useJumpCuts';
 import { createExportComposition } from '../hooks/useExporter';
 import { createHandleCreateProject, createHandleSelectProject } from '../hooks/useProjectHandlers';
-import { createLoadFile, createLoadMusicFile, createHandleClearMusic } from '../hooks/useMediaLoader';
+import { createLoadFile, createLoadMusicFile, createHandleClearMusic, createImportNativeMedia } from '../hooks/useMediaLoader';
 import { useTranscriptHandlers } from '../hooks/useTranscript';
 import { createTogglePlay, createHandleSeekPlayhead, usePlaybackKeyboard } from '../hooks/usePlayback';
 import { useRenderLoop } from '../hooks/useRenderLoop';
@@ -75,6 +75,7 @@ export const App: React.FC = () => {
   // transcript / captions
   const [transcript, setTranscript] = useState<TranscriptData | null>(null);
   const [transcriptName, setTranscriptName] = useState<string | null>(null);
+  const [captionClipEdits, setCaptionClipEdits] = useState<Record<string, ClipCaptionEdits>>({});
   const [captionMode, setCaptionMode] = useState<CaptionMode>('line');
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
   const [captionShader, setCaptionShader] = useState<CaptionShaderParams>(DEFAULT_CAPTION_SHADER);
@@ -145,6 +146,10 @@ export const App: React.FC = () => {
   const baseExportParams = videoInfo ? vidExport : bgExport;
   const setBaseExportParams = videoInfo ? setVidExport : setBgExport;
   const selectedClip = microTimelines.find(mt => mt.id === selectedClipId) ?? null;
+  const effectiveTranscript = useMemo(
+    () => (transcript && selectedClip ? applyClipCaptionEdits(transcript, captionClipEdits[selectedClip.id]) : transcript),
+    [transcript, selectedClip, captionClipEdits],
+  );
   const activeExportParams = selectedClip
     ? {
         ...baseExportParams,
@@ -289,7 +294,7 @@ export const App: React.FC = () => {
     setActiveGuide, setCropToGuide, setBgLayerOn, setBgOffMode, setBgOffColor, setVideoLayerOn, setCaptionsLayerOn, setMusicLayerOn,
     setCaptionMode, setCaptionStyle, setCaptionShader,
     setMuted, setMediaVolume, setOutroVolume,
-    setVideoInfo, setAudioInfo, setPlayheadSecond, setTranscript, setTranscriptName, setPlaying,
+    setVideoInfo, setAudioInfo, setPlayheadSecond, setTranscript, setTranscriptName, setCaptionClipEdits, setPlaying,
     setAudioReactivity, setMusicInfo, setMusic, setLimiter,
     setMicroTimelines, setSelectedClipId, setPendingClipStart,
     setCustomCuts, setJumpCutsEnabled, setJumpCutGapMs, setJumpCutPaddingMs, setCustomCutPaddingMs,
@@ -311,6 +316,7 @@ export const App: React.FC = () => {
     setMusicInfo, setMusicLayerOn, addToast, updateToast,
   };
   const loadFile = createLoadFile(mediaLoaderRefs, mediaLoaderSetters);
+  const importNativeFile = createImportNativeMedia(mediaLoaderRefs, mediaLoaderSetters);
   const loadMusicFile = createLoadMusicFile(mediaLoaderRefs, mediaLoaderSetters);
   const handleClearMusic = createHandleClearMusic(mediaLoaderRefs, mediaLoaderSetters);
   const onPickFile: React.ChangeEventHandler<HTMLInputElement> = (e) => {
@@ -329,7 +335,7 @@ export const App: React.FC = () => {
   const togglePlayRef = useRef(togglePlay);
   useEffect(() => { togglePlayRef.current = togglePlay; });
   const handleSeekPlayhead = createHandleSeekPlayhead(playbackRefs, playbackState, playbackSetters);
-  usePlaybackKeyboard(mediaElRef, togglePlayRef, setMuted);
+  usePlaybackKeyboard(mediaElRef, previewWrapRef, togglePlayRef, setMuted);
 
   // ---------- transcript file load & save ----------
   const { handleEditorUpdateTranscript, onPickTranscript } = useTranscriptHandlers({
@@ -346,9 +352,71 @@ export const App: React.FC = () => {
 
   const exportComposition = createExportComposition(
     { activeProjectIdRef, bgRendererRef, videoRendererRef, videoElRef, audioElRef, audioSourceRef, activeExportParamsRef, exportingRef, startRef, jumpCutGapListRef },
-    { bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, jumpCutsEnabled, audioReactivity, captionMode, captionStyle, captionShader, transcript, videoInfo, audioInfo, cropToGuide, activeGuide, availableGuides, previewFrame },
+    { bg, bgDither, vid, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, jumpCutsEnabled, audioReactivity, captionMode, captionStyle, captionShader, transcript: effectiveTranscript, videoInfo, audioInfo, cropToGuide, activeGuide, availableGuides, previewFrame },
     { setPlaying, setProjectStatus, addToast, updateToast, fitPreviewBack },
   );
+
+  const currentPresetSettings = useMemo(() => ({
+    background: bg,
+    backgroundDither: bgDither,
+    video: vid,
+    audioReactivity,
+    music,
+    limiter,
+    captionMode,
+    captionStyle,
+    captionShader,
+    layers: {
+      background: bgLayerOn,
+      video: videoLayerOn,
+      captions: captionsLayerOn,
+      music: musicLayerOn,
+      bgOffMode,
+      bgOffColor,
+    },
+    activeGuide,
+    cropToGuide,
+    exportBackground: bgExport,
+    exportVideo: vidExport,
+  }), [
+    bg, bgDither, vid, audioReactivity, music, limiter,
+    captionMode, captionStyle, captionShader,
+    bgLayerOn, videoLayerOn, captionsLayerOn, musicLayerOn, bgOffMode, bgOffColor,
+    activeGuide, cropToGuide, bgExport, vidExport,
+  ]);
+
+  const applyPresetSettings = (data: Record<string, any>) => {
+    if (data.background) setBg(data.background);
+    if (data.backgroundDither) setBgDither(data.backgroundDither);
+    if (data.video) setVid(normalizeVideoShaderParams(data.video));
+    if (data.audioReactivity) setAudioReactivity({ ...DEFAULT_AUDIO_REACTIVITY, ...data.audioReactivity });
+    if (data.captionMode) setCaptionMode(data.captionMode);
+    if (data.captionStyle) setCaptionStyle({ ...DEFAULT_CAPTION_STYLE, ...data.captionStyle });
+    if (data.captionShader) setCaptionShader({ ...DEFAULT_CAPTION_SHADER, ...data.captionShader });
+    if (data.limiter) setLimiter({ ...DEFAULT_LIMITER, ...data.limiter });
+    if (data.music) {
+      setMusic({
+        ...DEFAULT_MUSIC_PARAMS,
+        ...data.music,
+        sidechain: {
+          ...DEFAULT_MUSIC_PARAMS.sidechain,
+          ...(data.music.sidechain ?? {}),
+        },
+      });
+    }
+    if (data.layers) {
+      if (typeof data.layers.background === 'boolean') setBgLayerOn(data.layers.background);
+      if (typeof data.layers.video === 'boolean') setVideoLayerOn(data.layers.video);
+      if (typeof data.layers.captions === 'boolean') setCaptionsLayerOn(data.layers.captions);
+      if (typeof data.layers.music === 'boolean') setMusicLayerOn(data.layers.music);
+      if (data.layers.bgOffMode === 'grid' || data.layers.bgOffMode === 'color') setBgOffMode(data.layers.bgOffMode);
+      if (typeof data.layers.bgOffColor === 'string') setBgOffColor(data.layers.bgOffColor);
+    }
+    if (data.activeGuide === null || typeof data.activeGuide === 'string') setActiveGuide(data.activeGuide);
+    if (typeof data.cropToGuide === 'boolean') setCropToGuide(data.cropToGuide);
+    if (data.exportBackground) setBgExport({ ...DEFAULT_EXPORT, ...data.exportBackground });
+    if (data.exportVideo) setVidExport({ ...DEFAULT_EXPORT, ...data.exportVideo });
+  };
 
   // ---------- layout ----------
   const exportLayerSummary = [
@@ -357,23 +425,8 @@ export const App: React.FC = () => {
     captionsLayerOn ? 'captions' : null,
   ].filter(Boolean).join(' + ') || 'none';
 
-  const exportGuide = cropToGuide ? GUIDES.find((g) => g.key === activeGuide) : null;
-  const isExporting = projectStatus.kind === 'progress' && projectStatus.message.includes('Exporting');
-  
   const frameStyle: React.CSSProperties = useMemo(() => {
     if (!videoInfo) return { position: 'absolute', inset: 0, width: '100%', height: '100%' };
-
-    if (isExporting && exportGuide) {
-      // During export, fit the export dimensions (e.g. square) into the container
-      const r = fitRect(previewSize.w, previewSize.h, exportGuide.w, exportGuide.h);
-      return {
-        position: 'absolute',
-        left: r.x,
-        top: r.y,
-        width: r.w,
-        height: r.h,
-      };
-    }
 
     // Normal preview: fit the source video dimensions into the container
     return {
@@ -383,7 +436,7 @@ export const App: React.FC = () => {
       width: previewFrame.w,
       height: previewFrame.h,
     };
-  }, [isExporting, exportGuide, videoInfo, previewSize, previewFrame]);
+  }, [videoInfo, previewFrame]);
 
   const audioMode = !!audioInfo && !videoInfo;
 
@@ -419,7 +472,7 @@ export const App: React.FC = () => {
         previewFrame={previewFrame}
         videoInfo={videoInfo}
         audioInfo={audioInfo}
-        transcript={transcript}
+        transcript={effectiveTranscript}
         captionMode={captionMode}
         captionStyle={captionStyle}
         captionShader={captionShader}
@@ -495,6 +548,7 @@ export const App: React.FC = () => {
         bgSubTab={bgSubTab} setBgSubTab={setBgSubTab}
         vid={vid} setVid={setVid} videoSubTab={videoSubTab} setVideoSubTab={setVideoSubTab}
         onPickFile={onPickFile}
+        onImportNativeMedia={importNativeFile}
         captionsSubTab={captionsSubTab} setCaptionsSubTab={setCaptionsSubTab}
         captionMode={captionMode} setCaptionMode={setCaptionMode}
         captionStyle={captionStyle} setCaptionStyle={setCaptionStyle}
@@ -516,6 +570,8 @@ export const App: React.FC = () => {
         activeExportParams={activeExportParams} setActiveExportParams={setActiveExportParams}
         exportComposition={exportComposition} exportLayerSummary={exportLayerSummary}
         selectedClipName={selectedClip?.name}
+        currentPresetSettings={currentPresetSettings}
+        onApplyPresetSettings={applyPresetSettings}
         addToast={addToast}
       />
     </div>

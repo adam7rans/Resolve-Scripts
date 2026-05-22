@@ -7,11 +7,14 @@ import type { Project, Settings } from './types';
 export const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const PROJECTS_DIR = path.resolve(SERVER_DIR, '../../projects');
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
+export const PRESETS_DIR = path.resolve(SERVER_DIR, '../../presets');
+fs.mkdirSync(PRESETS_DIR, { recursive: true });
 
 export const PROJECT_FILE = 'project.json';
 export const SETTINGS_FILE = 'settings.json';
 export const CAPTION_FILE = 'caption.json';
 export const LEGACY_TRANSCRIPT_FILE = 'transcript.json';
+export const PRESET_FILE_EXT = '.json';
 
 // ── SSE client registry ───────────────────────────────────────────────────────
 export const sseClients = new Map<string, Set<(e: TranscribeEvent) => void>>();
@@ -50,8 +53,16 @@ export function uniqueSlug(base: string): string {
   while (fs.existsSync(path.join(PROJECTS_DIR, s))) s = `${base}-${n++}`;
   return s;
 }
+export function uniquePresetSlug(base: string): string {
+  const root = base || 'preset';
+  let s = root;
+  let n = 1;
+  while (fs.existsSync(path.join(PRESETS_DIR, `${s}${PRESET_FILE_EXT}`))) s = `${root}-${n++}`;
+  return s;
+}
 export function projectDir(id: string) { return path.join(PROJECTS_DIR, id); }
 export function exportDir(id: string, exportId: string) { return path.join(projectDir(id), 'exports', exportId); }
+export function presetPath(id: string) { return path.join(PRESETS_DIR, `${id}${PRESET_FILE_EXT}`); }
 
 // ── data access ───────────────────────────────────────────────────────────────
 export function readProject(id: string): Project | null {
@@ -122,5 +133,32 @@ export function projectMeta(id: string) {
     hasAudio: !!(proj.audioFile && fs.existsSync(path.join(pDir, proj.audioFile))),
     hasMusic: !!(proj.musicFile && fs.existsSync(path.join(pDir, proj.musicFile))),
     hasTranscript: hasCaption(id, proj),
+  };
+}
+
+export interface PresetMeta {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function readPreset(id: string): Record<string, any> | null {
+  const p = presetPath(id);
+  return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf-8')) : null;
+}
+
+export function writePreset(id: string, data: Record<string, any>) {
+  fs.writeFileSync(presetPath(id), JSON.stringify(data, null, 2));
+}
+
+export function presetMeta(id: string): PresetMeta | null {
+  const preset = readPreset(id);
+  if (!preset) return null;
+  return {
+    id,
+    name: typeof preset.name === 'string' && preset.name.trim() ? preset.name.trim() : id,
+    createdAt: typeof preset.createdAt === 'string' ? preset.createdAt : new Date().toISOString(),
+    updatedAt: typeof preset.updatedAt === 'string' ? preset.updatedAt : typeof preset.createdAt === 'string' ? preset.createdAt : new Date().toISOString(),
   };
 }
