@@ -8,6 +8,7 @@ import {
   type TranscriptData, type TranscriptWord,
 } from '../lib/transcript';
 import { DEFAULT_CAPTION_STYLE, type CaptionStyle } from '../lib/types';
+import { applyAlpha } from '../lib/captionColor';
 
 // After a caption's last word ends, hold it fully visible for this long…
 const CAPTION_HOLD_MS = 1000;
@@ -62,13 +63,23 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const rafRef = useRef<number | null>(null);
   const captionStyle = { ...DEFAULT_CAPTION_STYLE, ...style };
+  const activeColor = applyAlpha(captionStyle.color, captionStyle.colorOpacity ?? 1);
+  const dimColorResolved = applyAlpha(captionStyle.dimColor, captionStyle.dimColorOpacity ?? 1);
+  const shadowOn = captionStyle.shadowEnabled !== false;
+
+  // Mirror props that change frequently in refs so the RAF tick below can
+  // read the latest values without restarting the loop on every render.
+  // (Restarting the loop would also reset the closure and re-flicker.)
+  const playheadRef = useRef(playhead);
+  useEffect(() => { playheadRef.current = playhead; }, [playhead]);
 
   // poll currentTime every frame
   useEffect(() => {
     const tick = () => {
       let t: number;
-      if (playhead !== undefined) {
-        t = playhead * 1000;
+      const ph = playheadRef.current;
+      if (ph !== undefined) {
+        t = ph * 1000;
       } else {
         const v = timeSourceRef.current;
         t = v ? v.currentTime * 1000 : 0;
@@ -200,8 +211,8 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
             fontSize: captionStyle.wordFontSize,
             fontWeight: captionStyle.fontWeight,
             letterSpacing: `${captionStyle.letterSpacing}em`,
-            color: captionStyle.color,
-            textShadow: '0 2px 16px rgba(0,0,0,0.7)',
+            color: activeColor,
+            textShadow: shadowOn ? '0 2px 16px rgba(0,0,0,0.7)' : 'none',
             opacity: (captionStyle.wordHighlightEnabled ? (wordVisible ? 1 : 0) : 1) * wordFadeAlpha,
             transition: captionStyle.wordHighlightEnabled ? 'opacity 200ms ease, color 200ms ease' : 'none',
           }}
@@ -225,8 +236,8 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
           fontWeight: captionStyle.fontWeight,
           letterSpacing: `${captionStyle.letterSpacing}em`,
           lineHeight: captionStyle.lineHeight,
-          color: captionStyle.color,
-          textShadow: '0 2px 12px rgba(0,0,0,0.7)',
+          color: activeColor,
+          textShadow: shadowOn ? '0 2px 12px rgba(0,0,0,0.7)' : 'none',
           opacity: sentenceFadeAlpha,
         }}
       >
@@ -267,11 +278,11 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
 
               const { lead, body, trail } = splitWordParts(w.text);
               const dimColor = captionStyle.wordHighlightEnabled
-                ? captionStyle.dimColor
-                : captionStyle.color;
+                ? dimColorResolved
+                : activeColor;
               const bodyColor = captionStyle.wordHighlightEnabled
-                ? (highlighted ? captionStyle.color : captionStyle.dimColor)
-                : captionStyle.color;
+                ? (highlighted ? activeColor : dimColorResolved)
+                : activeColor;
 
               return (
                 <span key={i} style={{ display: 'inline' }}>
@@ -297,7 +308,7 @@ export const Captions: React.FC<CaptionsProps> = ({ transcript, mode, style = DE
                           bottom: 0,
                           height: 2,
                           width: drawWidth,
-                          background: captionStyle.color,
+                          background: activeColor,
                           opacity: drawOpacity,
                           transition:
                             underlineMode === 'draw'

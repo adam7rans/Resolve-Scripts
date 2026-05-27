@@ -1,11 +1,13 @@
 import type React from 'react';
 import { useEffect } from 'react';
+import type { AudioSource } from '../lib/AudioSource';
 import type { MusicPlayer } from '../lib/MusicPlayer';
 import type { ExportParams, MicroTimeline } from '../lib/types';
 import type { JumpCutGap } from './useJumpCuts';
 
 export interface PlayheadTickRefs {
   mediaElRef: React.MutableRefObject<HTMLMediaElement | null>;
+  audioSourceRef: React.MutableRefObject<AudioSource | null>;
   musicPlayerRef: React.MutableRefObject<MusicPlayer | null>;
   outroAudioRef: React.MutableRefObject<HTMLAudioElement>;
   playingRef: React.MutableRefObject<boolean>;
@@ -32,7 +34,7 @@ export function usePlayheadTick(
 ) {
   useEffect(() => {
     const {
-      mediaElRef, musicPlayerRef, outroAudioRef,
+      mediaElRef, audioSourceRef, musicPlayerRef, outroAudioRef,
       playingRef, playheadRef, playingInClipRef,
       selectedClipRef, activeExportParamsRef,
       jumpCutsEnabledRef, jumpCutGapListRef,
@@ -50,14 +52,14 @@ export function usePlayheadTick(
       const outroDuration = params.outroEnabled ? 5 : 0;
       const insideClip = clip && playingInClipRef.current;
       const clipEnd = insideClip ? clip.endSecond : totalDuration;
-      const limit = clipEnd + (insideClip ? outroDuration : 0);
+      const limit = clipEnd;
       const vTime = v.currentTime || 0;
 
       const now = performance.now();
       const dt = (now - lastT) / 1000;
       lastT = now;
 
-      const isOutroRange = clip && outroDuration > 0 && playheadRef.current >= clipEnd && playheadRef.current < limit - 0.02;
+      const isOutroRange = !insideClip && clip && outroDuration > 0 && playheadRef.current >= clipEnd && playheadRef.current < limit - 0.02;
       const shouldPlayOutro = playingRef.current && isOutroRange;
 
       if (shouldPlayOutro) {
@@ -74,11 +76,7 @@ export function usePlayheadTick(
 
       if (playingRef.current) {
         let nextP: number;
-        if (insideClip && outroDuration > 0 && playheadRef.current >= clipEnd - 0.01) {
-          nextP = playheadRef.current + dt;
-        } else {
-          nextP = vTime;
-        }
+        nextP = vTime;
 
         // jump-cut: if the new playhead falls inside a precomputed silence gap, seek past it
         if (jumpCutsEnabledRef.current && !v.seeking && !shouldPlayOutro) {
@@ -91,6 +89,12 @@ export function usePlayheadTick(
                 const newSec = g.endMs / 1000;
                 try { v.currentTime = newSec; } catch {}
                 nextP = newSec;
+                
+                // Duck the audio slightly to hide the transient pop of the jump
+                if (refs.audioSourceRef?.current) {
+                  refs.audioSourceRef.current.triggerJumpCutFade();
+                }
+                
                 break;
               }
             }

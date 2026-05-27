@@ -11,7 +11,7 @@ import {
 import { DEFAULT_LIMITER, type LimiterParams } from '../lib/AudioSource';
 import type { MusicParams } from '../lib/MusicPlayer';
 import { parseTranscript, type CaptionMode, type TranscriptData, type ClipCaptionEdits } from '../lib/transcript';
-import type { ProjectTaskStatus, MainTab, BgSubTab, VideoSubTab, VideoShaderSubTab, AudioSubTab, GuideKey } from '../lib/constants';
+import type { ProjectTaskStatus, MainTab, BgSubTab, VideoSubTab, VideoShaderSubTab, AudioSubTab, GuideKey, CaptionsSubTab } from '../lib/constants';
 import { snapToExportResolution } from '../lib/layoutUtils';
 import type { VideoRenderer } from '../lib/VideoRenderer';
 import {
@@ -40,6 +40,7 @@ export interface ProjectHandlerSetters {
   setVideoSubTab: React.Dispatch<React.SetStateAction<VideoSubTab>>;
   setVideoShaderSubTab: React.Dispatch<React.SetStateAction<VideoShaderSubTab>>;
   setAudioSubTab: React.Dispatch<React.SetStateAction<AudioSubTab>>;
+  setCaptionsSubTab: React.Dispatch<React.SetStateAction<CaptionsSubTab>>;
   setBg: React.Dispatch<React.SetStateAction<BackgroundParams>>;
   setBgDither: React.Dispatch<React.SetStateAction<DitherParams>>;
   setVid: React.Dispatch<React.SetStateAction<VideoShaderParams>>;
@@ -96,6 +97,7 @@ export function createHandleCreateProject(refs: ProjectHandlerRefs, setters: Pro
       s.setBgSubTab('noise');
       s.setVideoSubTab('shader');
       s.setVideoShaderSubTab('image');
+      s.setCaptionsSubTab('editor');
       s.setBg(DEFAULT_BACKGROUND);
       s.setBgDither(DEFAULT_DITHER);
       s.setVid(DEFAULT_VIDEO);
@@ -219,6 +221,9 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
           );
         }
         if (proj.ui.audioSubTab) s.setAudioSubTab(proj.ui.audioSubTab);
+        if (proj.ui.captionsSubTab) {
+          s.setCaptionsSubTab(proj.ui.captionsSubTab === 'captions' ? 'editor' : proj.ui.captionsSubTab);
+        }
         if (typeof proj.ui.muted === 'boolean') s.setMuted(proj.ui.muted);
         if (typeof proj.ui.mediaVolume === 'number') s.setMediaVolume(proj.ui.mediaVolume);
         if (typeof proj.ui.outroVolume === 'number') s.setOutroVolume(proj.ui.outroVolume);

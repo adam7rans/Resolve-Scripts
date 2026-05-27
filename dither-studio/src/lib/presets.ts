@@ -155,6 +155,63 @@ const baseVideoDefaults = {
 
 export const VIDEO_PRESETS: VideoPreset[] = [
   {
+    name: 'Sourceovcourse',
+    params: normalizeVideoShaderParams({
+      ...baseVideoDefaults,
+      // Gradient overlay
+      gradientEnabled: true,
+      gradientType: 0,
+      gradientStops: createDefaultVideoGradientStops('#ffffff', 1, '#ffffff', 0),
+      gradientColorA: '#ffffff',
+      gradientOpacityA: 1,
+      gradientColorB: '#ffffff',
+      gradientOpacityB: 0,
+      gradientOpacity: 1,
+      gradientBlendMode: 0,
+      gradientAngle: 1.6231562043547265,
+      gradientScale: 2.6,
+      gradientOffsetX: 0,
+      gradientOffsetY: -0.37,
+      // Levels / tone / color
+      blackPoint: 0.065,
+      whitePoint: 1,
+      brightness: 1.06,
+      contrast: 1.21,
+      shadows: 0,
+      midtones: -0.31,
+      highlights: -0.19,
+      exposure: -0.05,
+      gamma: 1,
+      saturation: 1,
+      clarity: 0,
+      // Position
+      positionX: 0,
+      positionY: -0.115,
+      positionRotation: 0,
+      // Distort
+      rotation: 0,
+      scale: 1,
+      distortionFrequency: 86.5,
+      distortionAmplitude: 0.005,
+      distortionSpeed: 1.7,
+      distortionAngle: 1,
+      // Dither
+      ditherEnabled: true,
+      ditherType: 8,
+      ditherScale: 1.7,
+      threshold: 1,
+      alphaThreshold: 0.83,
+      ditherGradient: false,
+      ditherColor: '#6b75ff',
+      ditherGradientColorA: '#93aae1',
+      ditherGradientColorB: '#000000',
+      ditherGradientAngle: 4.76474885794452,
+      ditherGradientScale: 2.6,
+      ditherGradientOffsetX: -0.83,
+      ditherGradientOffsetY: -0.29,
+    }),
+  },
+  {
     name: 'Tight Focus V2',
     params: normalizeVideoShaderParams({
       ...baseVideoDefaults,

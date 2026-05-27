@@ -1,36 +1,15 @@
 import React from 'react';
-import { Section, Select, Slider, Toggle } from './Controls';
+import { ColorInput, Section, Select, Slider, Toggle } from './Controls';
 import { CAPTION_FONT_OPTIONS } from '../lib/constants';
 import type { CaptionStyle } from '../lib/types';
+import { toHex } from '../lib/captionColor';
 
-export const CaptionFontControls: React.FC<{ value: CaptionStyle; onChange: (v: CaptionStyle) => void; onReset?: () => void }> = ({ value, onChange, onReset }) => {
+type Props = { value: CaptionStyle; onChange: (v: CaptionStyle) => void; onReset?: () => void };
+
+export const CaptionTypeControls: React.FC<Props> = ({ value, onChange, onReset }) => {
   const set = (patch: Partial<CaptionStyle>) => onChange({ ...value, ...patch });
   return (
-    <Section title="Caption font" onReset={onReset}>
-      <Select
-        label="family"
-        value={value.fontFamily}
-        options={CAPTION_FONT_OPTIONS}
-        onChange={(fontFamily) => set({ fontFamily })}
-      />
-      <Slider label="line size" value={value.lineFontSize} min={12} max={96} step={1} onChange={(v) => set({ lineFontSize: Math.round(v) })} />
-      <Slider label="word size" value={value.wordFontSize} min={16} max={160} step={1} onChange={(v) => set({ wordFontSize: Math.round(v) })} />
-      <Slider label="weight" value={value.fontWeight} min={300} max={900} step={100} onChange={(v) => set({ fontWeight: Math.round(v / 100) * 100 })} />
-      <Slider label="tracking" value={value.letterSpacing} min={0} max={0.2} step={0.005} onChange={(v) => set({ letterSpacing: v })} />
-      <Slider label="line height" value={value.lineHeight} min={0.9} max={2.2} step={0.05} onChange={(v) => set({ lineHeight: v })} />
-      <Slider label="line width %" value={value.lineMaxWidth} min={10} max={100} step={1} onChange={(v) => set({ lineMaxWidth: Math.round(v) })} />
-      <Slider label="horizontal pos" value={value.horizontalPosition} min={0} max={100} step={1} onChange={(v) => set({ horizontalPosition: Math.round(v) })} />
-      <Slider label="vertical pos" value={value.verticalPosition} min={0} max={100} step={1} onChange={(v) => set({ verticalPosition: Math.round(v) })} />
-      <Select
-        label="justify"
-        value={value.textAlign}
-        options={[
-          { label: 'left', value: 'left' },
-          { label: 'center', value: 'center' },
-          { label: 'right', value: 'right' },
-        ]}
-        onChange={(textAlign) => set({ textAlign: textAlign as CaptionStyle['textAlign'] })}
-      />
+    <Section title="Caption type" onReset={onReset}>
       <Select
         label="underline"
         value={value.underlineMode ?? (value.underlineEnabled === false ? 'off' : 'draw')}
@@ -51,6 +30,21 @@ export const CaptionFontControls: React.FC<{ value: CaptionStyle; onChange: (v: 
         onChange={(underlineFadeMs) => set({ underlineFadeMs: Math.round(underlineFadeMs) })}
       />
       <Toggle label="word highlight" value={value.wordHighlightEnabled} onChange={(wordHighlightEnabled) => set({ wordHighlightEnabled })} />
+      <Toggle label="shadow" value={value.shadowEnabled !== false} onChange={(shadowEnabled) => set({ shadowEnabled })} />
+      <ColorInput label="active color" value={toHex(value.color)} onChange={(color) => set({ color })} />
+      <Slider
+        label="active opacity"
+        value={value.colorOpacity ?? 1}
+        min={0} max={1} step={0.01}
+        onChange={(colorOpacity) => set({ colorOpacity })}
+      />
+      <ColorInput label="dim color" value={toHex(value.dimColor)} onChange={(dimColor) => set({ dimColor })} />
+      <Slider
+        label="dim opacity"
+        value={value.dimColorOpacity ?? 1}
+        min={0} max={1} step={0.01}
+        onChange={(dimColorOpacity) => set({ dimColorOpacity })}
+      />
       <Select
         label="line split"
         value={value.lineSplitMode ?? 'sentence'}
@@ -98,6 +92,38 @@ export const CaptionFontControls: React.FC<{ value: CaptionStyle; onChange: (v: 
           onChange={(lineMaxSeconds) => set({ lineMaxSeconds: Math.max(0.1, lineMaxSeconds) })}
         />
       )}
+    </Section>
+  );
+};
+
+export const CaptionFontControls: React.FC<Props> = ({ value, onChange, onReset }) => {
+  const set = (patch: Partial<CaptionStyle>) => onChange({ ...value, ...patch });
+  return (
+    <Section title="Caption font" onReset={onReset}>
+      <Select
+        label="family"
+        value={value.fontFamily}
+        options={CAPTION_FONT_OPTIONS}
+        onChange={(fontFamily) => set({ fontFamily })}
+      />
+      <Slider label="line size" value={value.lineFontSize} min={12} max={96} step={1} onChange={(v) => set({ lineFontSize: Math.round(v) })} />
+      <Slider label="word size" value={value.wordFontSize} min={16} max={160} step={1} onChange={(v) => set({ wordFontSize: Math.round(v) })} />
+      <Slider label="weight" value={value.fontWeight} min={300} max={900} step={100} onChange={(v) => set({ fontWeight: Math.round(v / 100) * 100 })} />
+      <Slider label="tracking" value={value.letterSpacing} min={0} max={0.2} step={0.005} onChange={(v) => set({ letterSpacing: v })} />
+      <Slider label="line height" value={value.lineHeight} min={0.9} max={2.2} step={0.05} onChange={(v) => set({ lineHeight: v })} />
+      <Slider label="line width %" value={value.lineMaxWidth} min={10} max={100} step={1} onChange={(v) => set({ lineMaxWidth: Math.round(v) })} />
+      <Slider label="horizontal pos" value={value.horizontalPosition} min={0} max={100} step={1} onChange={(v) => set({ horizontalPosition: Math.round(v) })} />
+      <Slider label="vertical pos" value={value.verticalPosition} min={0} max={100} step={1} onChange={(v) => set({ verticalPosition: Math.round(v) })} />
+      <Select
+        label="justify"
+        value={value.textAlign}
+        options={[
+          { label: 'left', value: 'left' },
+          { label: 'center', value: 'center' },
+          { label: 'right', value: 'right' },
+        ]}
+        onChange={(textAlign) => set({ textAlign: textAlign as CaptionStyle['textAlign'] })}
+      />
     </Section>
   );
 };

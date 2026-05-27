@@ -43,7 +43,7 @@ export const App: React.FC = () => {
   const [videoSubTab, setVideoSubTab] = useState<VideoSubTab>('shader');
   const [videoShaderSubTab, setVideoShaderSubTab] = useState<VideoShaderSubTab>('image');
   const [audioSubTab, setAudioSubTab] = useState<AudioSubTab>('music');
-  const [captionsSubTab, setCaptionsSubTab] = useState<CaptionsSubTab>('captions');
+  const [captionsSubTab, setCaptionsSubTab] = useState<CaptionsSubTab>('editor');
   const [outroVolume, setOutroVolume] = useState(0.5);
   const [outroAudio] = useState(() => {
     const a = new Audio('audio/bassnoise.wav');
@@ -249,7 +249,7 @@ export const App: React.FC = () => {
     microTimelines, selectedClipId,
     customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
     showSilenceGaps, showFillerCuts,
-    mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume,
+    mainTab, bgSubTab, videoSubTab, audioSubTab, captionsSubTab, muted, mediaVolume, outroVolume,
     videoShaderSubTab,
     projectHasVideo: !!activeProject?.hasVideo,
     projectHasAudio: !!activeProject?.hasAudio,
@@ -292,7 +292,7 @@ export const App: React.FC = () => {
   const projectSetters = {
     setProjects, setActiveProjectId, setProjectStatus,
       setMainTab, setBgSubTab, setVideoSubTab, setAudioSubTab,
-      setVideoShaderSubTab,
+      setVideoShaderSubTab, setCaptionsSubTab,
     setBg, setBgDither, setVid, setBgExport, setVidExport,
     setActiveGuide, setCropToGuide, setBgLayerOn, setBgOffMode, setBgOffColor, setVideoLayerOn, setCaptionsLayerOn, setMusicLayerOn,
     setCaptionMode, setCaptionStyle, setCaptionShader,

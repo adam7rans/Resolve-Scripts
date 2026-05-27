@@ -1,5 +1,6 @@
 import { splitSentences, type CaptionMode, type TranscriptData, type TranscriptWord } from './transcript';
 import { DEFAULT_CAPTION_STYLE, type CaptionStyle } from './types';
+import { applyAlpha } from './captionColor';
 
 const isWordActive = (w: TranscriptWord, ms: number) =>
   ms >= (w.start ?? 0) && ms <= (w.end ?? w.start ?? 0);
@@ -30,9 +31,15 @@ function applyCaptionFont(ctx: CanvasRenderingContext2D, size: number, style: Ca
   (ctx as any).letterSpacing = `${style.letterSpacing}em`;
   ctx.textBaseline = 'alphabetic';
   ctx.lineJoin = 'round';
-  ctx.shadowColor = 'rgba(0,0,0,0.7)';
-  ctx.shadowBlur = 14;
-  ctx.shadowOffsetY = 2;
+  if (style.shadowEnabled === false) {
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+  } else {
+    ctx.shadowColor = 'rgba(0,0,0,0.7)';
+    ctx.shadowBlur = 14;
+    ctx.shadowOffsetY = 2;
+  }
 }
 
 function measure(ctx: CanvasRenderingContext2D, text: string) {
@@ -133,6 +140,9 @@ export function drawCaptionsToCanvas(
   playbackStartMs?: number,
 ) {
   const style = { ...DEFAULT_CAPTION_STYLE, ...inputStyle };
+  const activeColor = applyAlpha(style.color, style.colorOpacity ?? 1);
+  const dimColor = applyAlpha(style.dimColor, style.dimColorOpacity ?? 1);
+  const shadowOn = style.shadowEnabled !== false;
   const wordBoxWidth = width * 0.92;
   const lineBoxFraction = Math.max(0.01, Math.min(1, (style.lineMaxWidth ?? 92) / 100));
   const lineBoxWidth = width * lineBoxFraction;
@@ -159,12 +169,14 @@ export function drawCaptionsToCanvas(
       return;
     }
     applyCaptionFont(ctx, wordFontSize, style);
-    ctx.shadowBlur = 14 * scale;
-    ctx.shadowOffsetY = 2 * scale;
+    if (shadowOn) {
+      ctx.shadowBlur = 14 * scale;
+      ctx.shadowOffsetY = 2 * scale;
+    }
     const wordWidth = measure(ctx, word);
     const wordBoxLeft = ((width - wordBoxWidth) * style.horizontalPosition) / 100;
     const x = lineStartX(wordBoxLeft, wordBoxWidth, wordWidth, style.textAlign);
-    ctx.fillStyle = style.color;
+    ctx.fillStyle = activeColor;
     ctx.globalAlpha = wordAlpha;
     ctx.fillText(word, x, centerY + wordFontSize / 3);
     ctx.restore();
@@ -184,8 +196,10 @@ export function drawCaptionsToCanvas(
   }
 
   applyCaptionFont(ctx, lineFontSize, style);
-  ctx.shadowBlur = 12 * scale;
-  ctx.shadowOffsetY = 2 * scale;
+  if (shadowOn) {
+    ctx.shadowBlur = 12 * scale;
+    ctx.shadowOffsetY = 2 * scale;
+  }
   ctx.globalAlpha = sentenceAlpha;
   const boxWidth = lineBoxWidth;
   const boxLeft = ((width - lineBoxWidth) * style.horizontalPosition) / 100;
@@ -234,10 +248,10 @@ export function drawCaptionsToCanvas(
       const word = (token as any).word ?? token.text.trimEnd();
       const { lead, body, trail } = splitWordParts(word);
       const trailingSpace = token.text.endsWith(' ') ? ' ' : '';
-      const dim = style.wordHighlightEnabled ? style.dimColor : style.color;
+      const dim = style.wordHighlightEnabled ? dimColor : activeColor;
       const active = style.wordHighlightEnabled
-        ? (token.active ? style.color : style.dimColor)
-        : style.color;
+        ? (token.active ? activeColor : dimColor)
+        : activeColor;
 
       const leadW = lead ? measure(ctx, lead) : 0;
       const bodyW = body ? measure(ctx, body) : 0;
@@ -279,7 +293,7 @@ export function drawCaptionsToCanvas(
           ctx.save();
           ctx.shadowColor = 'transparent';
           ctx.globalAlpha = alpha * sentenceAlpha;
-          ctx.fillStyle = style.color;
+          ctx.fillStyle = activeColor;
           ctx.fillRect(bodyX, y + (5 * scale), barWidth, 2 * scale);
           ctx.restore();
         }

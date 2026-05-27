@@ -10,6 +10,7 @@ import { snapToExportResolution } from '../lib/layoutUtils';
 import type { VideoRenderer } from '../lib/VideoRenderer';
 import {
   listProjects, uploadVideo, uploadAudio, uploadMusic, deleteMusic,
+  importNativeMedia, getVideoUrl, getAudioUrl,
   type ProjectMeta,
 } from '../lib/projectApi';
 import type { TranscriptData } from '../lib/transcript';
@@ -45,6 +46,72 @@ export interface MediaLoaderSetters {
   setMusicLayerOn: React.Dispatch<React.SetStateAction<boolean>>;
   addToast: (message: string, type?: Toast['type'], sticky?: boolean) => number;
   updateToast: (id: number, message: string, type: Toast['type']) => void;
+}
+
+function loadManagedVideoSource(
+  refs: MediaLoaderRefs,
+  setters: MediaLoaderSetters,
+  pid: string,
+  name: string,
+) {
+  const { mediaElRef, audioSourceRef, videoRendererRef, videoElRef } = refs;
+  const s = setters;
+  const url = getVideoUrl(pid);
+  const v = document.createElement('video');
+  v.src = url;
+  v.muted = false;
+  v.volume = 1;
+  v.playsInline = true;
+  v.preload = 'auto';
+  v.addEventListener('loadedmetadata', () => {
+    s.setVideoInfo({ name, duration: v.duration, w: v.videoWidth, h: v.videoHeight });
+    const snap = snapToExportResolution(v.videoWidth, v.videoHeight);
+    s.setVidExport((p) => {
+      const nextEnd = p.endSecond === undefined ? v.duration : Math.min(v.duration, p.endSecond);
+      const nextStart = Math.min(p.startSecond, Math.max(0, nextEnd - 0.01));
+      return {
+        ...p,
+        width: snap.w,
+        height: snap.h,
+        startSecond: nextStart,
+        endSecond: nextEnd,
+        duration: Math.max(0.01, nextEnd - nextStart),
+      };
+    });
+    videoRendererRef.current?.setVideo(v);
+    videoElRef.current = v;
+    mediaElRef.current = v;
+    audioSourceRef.current = new AudioSource({ element: v, url });
+    v.currentTime = 0;
+  });
+}
+
+function loadManagedAudioSource(
+  refs: MediaLoaderRefs,
+  setters: MediaLoaderSetters,
+  pid: string,
+  name: string,
+) {
+  const { mediaElRef, audioSourceRef, audioElRef } = refs;
+  const s = setters;
+  const url = getAudioUrl(pid);
+  const a = document.createElement('audio');
+  a.src = url;
+  a.crossOrigin = 'anonymous';
+  a.preload = 'auto';
+  a.addEventListener('loadedmetadata', () => {
+    const duration = a.duration;
+    s.setAudioInfo({ name, duration });
+    s.setBgExport((p) => {
+      const nextEnd = p.endSecond === undefined ? duration : Math.min(duration, p.endSecond);
+      const nextStart = Math.min(p.startSecond, Math.max(0, nextEnd - 0.01));
+      return { ...p, startSecond: nextStart, endSecond: nextEnd, duration: Math.max(0.01, nextEnd - nextStart) };
+    });
+    audioElRef.current = a;
+    mediaElRef.current = a;
+    audioSourceRef.current = new AudioSource({ element: a, url });
+    a.currentTime = 0;
+  });
 }
 
 export function createLoadVideoFile(refs: MediaLoaderRefs, setters: MediaLoaderSetters) {
@@ -244,6 +311,56 @@ export function createLoadFile(refs: MediaLoaderRefs, setters: MediaLoaderSetter
       loadAudioFile(file, pid);
     } else {
       loadVideoFile(file, pid);
+    }
+  };
+}
+
+export function createImportNativeMedia(refs: MediaLoaderRefs, setters: MediaLoaderSetters) {
+  return async () => {
+    const { videoBlobUrlRef, audioBlobUrlRef, mediaElRef, videoRendererRef, videoElRef, audioSourceRef, audioElRef, activeProjectIdRef } = refs;
+    const s = setters;
+    const pid = activeProjectIdRef.current;
+    if (!pid) {
+      s.setProjectStatus({ kind: 'error', message: 'Create or select a project before importing media' });
+      s.addToast('Create or select a project before importing media', 'error');
+      return;
+    }
+
+    if (videoBlobUrlRef.current) URL.revokeObjectURL(videoBlobUrlRef.current);
+    if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
+    s.setPlaying(false);
+    mediaElRef.current?.pause();
+    videoRendererRef.current?.setVideo(null);
+    videoElRef.current = null;
+    audioSourceRef.current?.dispose();
+    audioSourceRef.current = null;
+    audioElRef.current = null;
+    mediaElRef.current = null;
+    s.setVideoInfo(null);
+    s.setAudioInfo(null);
+    s.setTranscript(null);
+    s.setTranscriptName(null);
+    s.setPlayheadSecond(0);
+
+    const importId = s.addToast('Choose a file to move into the project…', 'progress', true);
+    s.setProjectStatus({ kind: 'progress', message: 'Waiting for a file selection', detail: `Folder: projects/${pid}` });
+
+    try {
+      const result = await importNativeMedia(pid);
+      if (result.mediaType === 'audio') {
+        s.setMainTab('audio');
+        s.setAudioSubTab('reactivity');
+        loadManagedAudioSource(refs, setters, pid, result.originalName);
+      } else {
+        loadManagedVideoSource(refs, setters, pid, result.originalName);
+      }
+      s.setProjectStatus({ kind: 'progress', message: `${result.mediaType === 'audio' ? 'Audio' : 'Video'} transferred; starting transcription`, detail: `Folder: projects/${pid}` });
+      s.updateToast(importId, `${result.mediaType === 'audio' ? 'Audio' : 'Video'} moved into project — starting transcription…`, 'info');
+      listProjects().then(s.setProjects);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Import failed';
+      s.setProjectStatus({ kind: 'error', message });
+      s.updateToast(importId, message, 'error');
     }
   };
 }

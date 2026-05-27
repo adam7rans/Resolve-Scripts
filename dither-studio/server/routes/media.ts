@@ -1,7 +1,9 @@
 import { Router } from 'express';
+import { execFile } from 'child_process';
 import multer from 'multer';
 import * as fs from 'fs';
 import * as path from 'path';
+import { promisify } from 'util';
 import { runTranscriptionPipeline, runAudioTranscriptionPipeline } from '../transcribe.js';
 import {
   CAPTION_FILE, projectDir, emit,
@@ -10,6 +12,121 @@ import {
 } from '../helpers.js';
 
 export const mediaRoutes = Router();
+const execFileAsync = promisify(execFile);
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.aac']);
+
+type ImportedMediaFile = {
+  filename: string;
+  originalname: string;
+  path: string;
+};
+
+function deleteFileQuiet(filePath: string) {
+  try { fs.unlinkSync(filePath); } catch {}
+}
+
+function cleanupReplacedMedia(id: string, previousFiles: Array<string | undefined>, nextFilename: string) {
+  for (const name of previousFiles) {
+    if (!name || name === nextFilename) continue;
+    deleteFileQuiet(path.join(projectDir(id), name));
+  }
+  clearCaptions(id);
+}
+
+function finalizeVideoImport(id: string, proj: NonNullable<ReturnType<typeof readProject>>, file: ImportedMediaFile, res: { json: (body: unknown) => void }) {
+  cleanupReplacedMedia(id, [proj.videoFile, proj.audioFile], file.filename);
+
+  proj.videoFile = file.filename;
+  proj.originalVideoName = file.originalname;
+  proj.mediaType = 'video';
+  proj.importedAt = new Date().toISOString();
+  proj.updatedAt = proj.importedAt;
+  delete proj.audioFile;
+  delete proj.originalAudioName;
+  delete proj.transcriptFile;
+  delete proj.captionFile;
+  writeProject(id, proj);
+  emit(id, { type: 'video_saved', message: 'Video imported into project folder' });
+
+  runTranscriptionPipeline(file.path, projectDir(id), (event) => {
+    emit(id, event);
+    if (event.type === 'done') {
+      const p = readProject(id);
+      if (p) {
+        p.captionFile = CAPTION_FILE;
+        p.updatedAt = new Date().toISOString();
+        writeProject(id, p);
+      }
+    }
+  });
+
+  res.json({ ok: true, mediaType: 'video', filename: file.filename, originalName: file.originalname });
+}
+
+function finalizeAudioImport(id: string, proj: NonNullable<ReturnType<typeof readProject>>, file: ImportedMediaFile, res: { json: (body: unknown) => void }) {
+  cleanupReplacedMedia(id, [proj.videoFile, proj.audioFile], file.filename);
+
+  proj.audioFile = file.filename;
+  proj.originalAudioName = file.originalname;
+  proj.mediaType = 'audio';
+  proj.importedAt = new Date().toISOString();
+  proj.updatedAt = proj.importedAt;
+  delete proj.videoFile;
+  delete proj.originalVideoName;
+  delete proj.transcriptFile;
+  delete proj.captionFile;
+  writeProject(id, proj);
+  emit(id, { type: 'video_saved', message: 'Audio imported into project folder' });
+
+  runAudioTranscriptionPipeline(file.path, projectDir(id), (event) => {
+    emit(id, event);
+    if (event.type === 'done') {
+      const p = readProject(id);
+      if (p) {
+        p.captionFile = CAPTION_FILE;
+        p.updatedAt = new Date().toISOString();
+        writeProject(id, p);
+      }
+    }
+  });
+
+  res.json({ ok: true, mediaType: 'audio', filename: file.filename, originalName: file.originalname });
+}
+
+function isAudioPath(filePath: string): boolean {
+  return AUDIO_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+async function chooseNativeMediaPath(): Promise<string | null> {
+  if (process.platform !== 'darwin') {
+    throw new Error('Native transfer import is currently supported on macOS only');
+  }
+
+  const script = [
+    'try',
+    'POSIX path of (choose file with prompt "Choose a video or audio file to move into this project" of type {"public.movie", "public.audio"})',
+    'on error number -128',
+    'return ""',
+    'end try',
+  ];
+  const args = script.flatMap((line) => ['-e', line]);
+  const { stdout } = await execFileAsync('osascript', args);
+  const pickedPath = stdout.trim();
+  return pickedPath || null;
+}
+
+function moveFileIntoPlace(sourcePath: string, targetPath: string) {
+  if (path.resolve(sourcePath) === path.resolve(targetPath)) return;
+  deleteFileQuiet(targetPath);
+  try {
+    fs.renameSync(sourcePath, targetPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'EXDEV') throw err;
+    fs.copyFileSync(sourcePath, targetPath);
+    fs.unlinkSync(sourcePath);
+  }
+}
 
 // ── multer configs ────────────────────────────────────────────────────────────
 const videoUpload = multer({
@@ -58,33 +175,7 @@ mediaRoutes.post('/:id/video', videoUpload.single('video'), (req, res) => {
     res.status(400).json({ error: 'Bad request' });
     return;
   }
-
-  proj.videoFile = req.file.filename;
-  proj.originalVideoName = req.file.originalname;
-  proj.mediaType = 'video';
-  proj.importedAt = new Date().toISOString();
-  proj.updatedAt = proj.importedAt;
-  delete proj.audioFile;
-  delete proj.originalAudioName;
-  delete proj.transcriptFile;
-  delete proj.captionFile;
-  writeProject(id, proj);
-  emit(id, { type: 'video_saved', message: 'Video imported into project folder' });
-
-  // Start pipeline async — don't await
-  runTranscriptionPipeline(req.file.path, projectDir(id), (event) => {
-    emit(id, event);
-    if (event.type === 'done') {
-      const p = readProject(id);
-      if (p) {
-        p.captionFile = CAPTION_FILE;
-        p.updatedAt = new Date().toISOString();
-        writeProject(id, p);
-      }
-    }
-  });
-
-  res.json({ ok: true, filename: req.file.filename });
+  finalizeVideoImport(id, proj, req.file, res);
 });
 
 // Serve video with range-request support for scrubbing
@@ -134,32 +225,45 @@ mediaRoutes.post('/:id/audio', audioUpload.single('audio'), (req, res) => {
     res.status(400).json({ error: 'Bad request' });
     return;
   }
+  finalizeAudioImport(id, proj, req.file, res);
+});
 
-  proj.audioFile = req.file.filename;
-  proj.originalAudioName = req.file.originalname;
-  proj.mediaType = 'audio';
-  proj.importedAt = new Date().toISOString();
-  proj.updatedAt = proj.importedAt;
-  delete proj.videoFile;
-  delete proj.originalVideoName;
-  delete proj.transcriptFile;
-  delete proj.captionFile;
-  writeProject(id, proj);
-  emit(id, { type: 'video_saved', message: 'Audio imported into project folder' });
+// Native macOS import — opens a server-side file picker and moves the chosen
+// file into the project folder so we do not keep a duplicate in Downloads.
+mediaRoutes.post('/:id/import-native', async (req, res) => {
+  const id = req.params.id as string;
+  const proj = readProject(id);
+  if (!proj) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
 
-  runAudioTranscriptionPipeline(req.file.path, projectDir(id), (event) => {
-    emit(id, event);
-    if (event.type === 'done') {
-      const p = readProject(id);
-      if (p) {
-        p.captionFile = CAPTION_FILE;
-        p.updatedAt = new Date().toISOString();
-        writeProject(id, p);
-      }
+  try {
+    const sourcePath = await chooseNativeMediaPath();
+    if (!sourcePath) {
+      res.status(400).json({ error: 'Import cancelled' });
+      return;
     }
-  });
+    if (!fs.existsSync(sourcePath)) {
+      res.status(404).json({ error: 'Selected file no longer exists' });
+      return;
+    }
 
-  res.json({ ok: true, filename: req.file.filename });
+    const originalName = path.basename(sourcePath);
+    const audio = isAudioPath(sourcePath);
+    const filename = audio ? safeAudioFilename(originalName) : safeFilename(originalName);
+    const targetPath = path.join(projectDir(id), filename);
+    fs.mkdirSync(projectDir(id), { recursive: true });
+    moveFileIntoPlace(sourcePath, targetPath);
+
+    const importedFile = { filename, originalname: originalName, path: targetPath };
+    if (audio) finalizeAudioImport(id, proj, importedFile, res);
+    else finalizeVideoImport(id, proj, importedFile, res);
+  } catch (err) {
+    console.error('[media] Native import failed:', err);
+    const message = err instanceof Error ? err.message : 'Native import failed';
+    res.status(500).json({ error: message });
+  }
 });
 
 // Serve audio with range-request support

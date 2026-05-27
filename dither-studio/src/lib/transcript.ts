@@ -39,6 +39,17 @@ export type TranscriptData = {
 
 export type CaptionMode = 'line' | 'word';
 
+export type ClipCaptionHiddenWord = {
+  text?: string;
+  start: number;
+  end: number;
+};
+
+export type ClipCaptionEdits = {
+  hiddenWords?: ClipCaptionHiddenWord[];
+  maxWordEndMs?: number;
+};
+
 /** Accepts the two formats used in w3rk17/src/content/. */
 export function parseTranscript(raw: unknown): TranscriptData {
   const rawSource: any = raw;
@@ -105,6 +116,44 @@ export function parseTranscript(raw: unknown): TranscriptData {
     chapters,
     utterances,
   };
+}
+
+export function applyClipCaptionEdits(
+  transcript: TranscriptData,
+  edits?: ClipCaptionEdits | null,
+): TranscriptData {
+  const hiddenWords = edits?.hiddenWords?.filter((word) => typeof word.start === 'number' && typeof word.end === 'number') ?? [];
+  const maxWordEndMs = typeof edits?.maxWordEndMs === 'number' ? edits.maxWordEndMs : undefined;
+  if (hiddenWords.length === 0 && maxWordEndMs === undefined) return transcript;
+
+  const hiddenKeys = new Set(
+    hiddenWords.map((word) => `${word.start}:${word.end}:${word.text ?? ''}`),
+  );
+
+  let changed = false;
+  const utterances = transcript.utterances.map((utterance) => {
+    if (!utterance.words?.length) return utterance;
+    const filteredWords = utterance.words.filter((word) => {
+      if (maxWordEndMs !== undefined && word.end > maxWordEndMs) return false;
+      const exactKey = `${word.start}:${word.end}:${word.text}`;
+      if (hiddenKeys.has(exactKey)) return false;
+      const wildcardKey = `${word.start}:${word.end}:`;
+      return !hiddenKeys.has(wildcardKey);
+    });
+    if (filteredWords.length === utterance.words.length) return utterance;
+    changed = true;
+    const nextStart = filteredWords[0]?.start ?? utterance.start;
+    const nextEnd = filteredWords[filteredWords.length - 1]?.end ?? utterance.end;
+    return {
+      ...utterance,
+      start: nextStart,
+      end: nextEnd,
+      words: filteredWords,
+      text: filteredWords.map((word) => word.text ?? '').join(' ').trim(),
+    };
+  });
+
+  return changed ? { ...transcript, utterances } : transcript;
 }
 
 const SENTENCE_END = /[.!?]+$/;

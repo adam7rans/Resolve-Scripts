@@ -17,6 +17,8 @@ interface Props {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onResetView: () => void;
+  followPlayhead: boolean;
+  onToggleFollow: () => void;
   skipGapsEnabled: boolean;
   selectedGapKey: string | null;
   skipGapDisabled: Record<string, true>;
@@ -30,7 +32,7 @@ interface Props {
 export const TimelineControls: React.FC<Props> = ({
   microTimelines, selectedClip, onSelectClip, onPlayheadChange, onRenameClip,
   pendingClipStart, onAddStart, onAddEnd, onCancelPending, onDeleteClip,
-  onFocusClip, onZoomIn, onZoomOut, onResetView,
+  onFocusClip, onZoomIn, onZoomOut, onResetView, followPlayhead, onToggleFollow,
   skipGapsEnabled, selectedGapKey, skipGapDisabled, skipGapOverrides,
   onToggleGapDisabled, onResetAllSkipGaps,
   outroEnabled, onToggleOutro,
@@ -117,6 +119,18 @@ export const TimelineControls: React.FC<Props> = ({
         <button style={btn} onClick={onZoomIn} title="Zoom in">Zoom In</button>
         <button style={btn} onClick={onZoomOut} title="Zoom out">Zoom Out</button>
         <button style={btn} onClick={onResetView} title="Show the full duration">Reset</button>
+        <button
+          style={{
+            ...btn,
+            background: followPlayhead ? '#1f6feb33' : '#1a1a1a',
+            borderColor: followPlayhead ? '#1f6feb' : '#2a2a2a',
+            color: followPlayhead ? '#fff' : '#aaa',
+          }}
+          onClick={onToggleFollow}
+          title={followPlayhead ? 'Following playhead — click to stop' : 'Auto-scroll the timeline to follow the playhead when zoomed in'}
+        >
+          {followPlayhead ? '⏵ Following' : '⏵ Follow'}
+        </button>
 
         {skipGapsEnabled && selectedGapKey && onToggleGapDisabled && (() => {
           const isDisabled = !!skipGapDisabled[selectedGapKey];

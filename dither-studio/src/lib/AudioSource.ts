@@ -61,6 +61,7 @@ export class AudioSource {
   private ctx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private srcNode: MediaElementAudioSourceNode | null = null;
+  private cutGain: GainNode | null = null;
   private gainNode: GainNode | null = null;
   private limiterIn: GainNode | null = null;
   private limiterComp: DynamicsCompressorNode | null = null;
@@ -92,15 +93,17 @@ export class AudioSource {
     const limiterIn = ctx.createGain();
     const comp = ctx.createDynamicsCompressor();
     const limiterOut = ctx.createGain();
+    const cutGain = ctx.createGain();
     const gain = ctx.createGain();
     const analyser = ctx.createAnalyser();
     analyser.fftSize = FFT_SIZE;
     analyser.smoothingTimeConstant = 0.4;
 
     // Limiter graph (always in the chain; bypassed by neutralizing the
-    // compressor + gains when disabled). Order: src → limiterIn → comp →
+    // compressor + gains when disabled). Order: src → cutGain → limiterIn → comp →
     // limiterOut → gain (mute) → analyser (post-fx) → destination.
-    src.connect(limiterIn);
+    src.connect(cutGain);
+    cutGain.connect(limiterIn);
     limiterIn.connect(comp);
     comp.connect(limiterOut);
     limiterOut.connect(gain);
@@ -109,6 +112,7 @@ export class AudioSource {
 
     this.ctx = ctx;
     this.srcNode = src;
+    this.cutGain = cutGain;
     this.gainNode = gain;
     this.limiterIn = limiterIn;
     this.limiterComp = comp;
@@ -165,6 +169,18 @@ export class AudioSource {
     // Also mute the element so it works without the audio graph (e.g., before
     // first play if ensureGraph hasn't been called yet).
     this.element.muted = muted;
+  }
+
+  /**
+   * Ducks the volume instantly to 0 and ramps it back up over `durationSec`
+   * to hide transient pops when the playhead jumps over a skip block.
+   */
+  triggerJumpCutFade(durationSec = 0.03) {
+    if (!this.cutGain || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    this.cutGain.gain.cancelScheduledValues(now);
+    this.cutGain.gain.setValueAtTime(0, now);
+    this.cutGain.gain.setTargetAtTime(1, now, durationSec / 3);
   }
 
   /**

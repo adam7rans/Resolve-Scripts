@@ -3,7 +3,7 @@ export type BgSubTab = 'noise' | 'dither';
 export type VideoSubTab = 'shader' | 'gradient' | 'settings';
 export type VideoShaderSubTab = 'image' | 'rez' | 'distortion' | 'dither' | 'position';
 export type AudioSubTab = 'reactivity' | 'music';
-export type CaptionsSubTab = 'captions' | 'font' | 'shader';
+export type CaptionsSubTab = 'editor' | 'type' | 'font' | 'shader';
 export type FxSubTab = 'sidechain' | 'limiter';
 
 export type ProjectTaskStatus = {

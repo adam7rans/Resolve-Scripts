@@ -8,7 +8,7 @@ import type { CaptionsSubTab } from '../../lib/constants';
 import { Section, Slider, Toggle } from '../Controls';
 import { TabBar } from '../Tabs';
 import { PillToggle } from '../LayerToggle';
-import { CaptionFontControls } from '../CaptionFontControls';
+import { CaptionFontControls, CaptionTypeControls } from '../CaptionFontControls';
 import { CaptionsEditor } from '../CaptionsEditor';
 
 interface Props {
@@ -37,27 +37,24 @@ export const CaptionsPanel: React.FC<Props> = ({
   <>
     <TabBar<CaptionsSubTab>
       tabs={[
-        { value: 'captions', label: 'Captions' },
-        { value: 'font',     label: 'Font' },
-        { value: 'shader',   label: 'Shader' },
+        { value: 'editor', label: 'Editor' },
+        { value: 'type',   label: 'Type' },
+        { value: 'font',   label: 'Font' },
+        { value: 'shader', label: 'Shader' },
       ]}
       value={captionsSubTab}
       onChange={setCaptionsSubTab}
       variant="sub"
     />
 
-    {captionsSubTab === 'captions' && (
+    {captionsSubTab === 'editor' && (
       <>
-        <Section title="Captions">
+        <Section title="Source">
           {transcript ? (
             <>
               <div style={{ color: '#aaa', marginBottom: 6 }}>
                 {transcriptName}<br />
                 {transcript.utterances.length} utterance{transcript.utterances.length === 1 ? '' : 's'}
-              </div>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-                <PillToggle label="Line mode" on={captionMode === 'line'} onClick={() => setCaptionMode('line')} />
-                <PillToggle label="Word mode" on={captionMode === 'word'} onClick={() => setCaptionMode('word')} />
               </div>
               <label style={{
                 display: 'inline-block', padding: '4px 10px', background: '#222',
@@ -86,6 +83,18 @@ export const CaptionsPanel: React.FC<Props> = ({
         <Section title="Editor">
           <CaptionsEditor transcript={transcript} onUpdate={onEditorUpdate} />
         </Section>
+      </>
+    )}
+
+    {captionsSubTab === 'type' && (
+      <>
+        <Section title="Caption type">
+          <div style={{ display: 'flex', gap: 6 }}>
+            <PillToggle label="Line mode" on={captionMode === 'line'} onClick={() => setCaptionMode('line')} />
+            <PillToggle label="Word mode" on={captionMode === 'word'} onClick={() => setCaptionMode('word')} />
+          </div>
+        </Section>
+        <CaptionTypeControls value={captionStyle} onChange={setCaptionStyle} onReset={() => setCaptionStyle(DEFAULT_CAPTION_STYLE)} />
       </>
     )}
 

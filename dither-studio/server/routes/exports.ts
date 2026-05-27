@@ -2,14 +2,11 @@ import { Router } from 'express';
 import multer from 'multer';
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { exec, spawn } from 'child_process';
 import {
   SERVER_DIR, projectDir, exportDir, slugify, safePngFilename,
   readProject, writeProject, readSettings,
 } from '../helpers.js';
-
-const execAsync = promisify(exec);
 
 export const exportRoutes = Router();
 
@@ -55,11 +52,11 @@ async function stitchVideo(projectId: string, exportId: string) {
   const inputPrefix = prefix.replace(/ +/g, '-').replace(/ /g, '-');
   const pattern = path.join(dir, `${inputPrefix ? inputPrefix + '_' : '_'}%05d.png`);
 
-  // Build FFMPEG command
+  // Build FFMPEG arguments
   // Input 0: PNG sequence
-  let inputs = `-framerate ${fps} -i "${pattern}"`;
+  const ffmpegArgs: string[] = ['-y', '-framerate', String(fps), '-i', pattern];
   let filterComplex = '';
-  let audioMap = '';
+  let audioMap: string[] = ['-map', '0:v'];
 
   const audioSources: { path: string; volume: number; isOutro?: boolean }[] = [];
   const pDir = projectDir(projectId);
@@ -98,12 +95,14 @@ async function stitchVideo(projectId: string, exportId: string) {
       const isMusic = i > 0 && !src.isOutro;
       const isOutro = src.isOutro;
       const isMain = i === 0 && !src.isOutro;
-      const loopStr = isMusic ? '-stream_loop -1 ' : '';
-      const ssStr = (isOutro || isMusic) ? ''
-                  : (isMain && hasKeptSegments) ? ''
-                  : `-ss ${startTime || 0} `;
-      const tStr = (isMain && hasKeptSegments) ? '' : `-t ${duration || 0} `;
-      inputs += ` ${loopStr}${ssStr}${tStr}-i "${src.path}"`;
+      if (isMusic) ffmpegArgs.push('-stream_loop', '-1');
+      if (!isOutro && !isMusic && !(isMain && hasKeptSegments)) {
+        ffmpegArgs.push('-ss', String(startTime || 0));
+      }
+      if (!(isMain && hasKeptSegments)) {
+        ffmpegArgs.push('-t', String(duration || 0));
+      }
+      ffmpegArgs.push('-i', src.path);
     });
 
     const sc = settings?.music?.sidechain;
@@ -136,7 +135,15 @@ async function stitchVideo(projectId: string, exportId: string) {
           const concatIns: string[] = [];
           for (let j = 0; j < n; j++) {
             const seg = keptSegments[j];
-            filter += `[m_src_${j}]atrim=start=${seg.srcStart.toFixed(3)}:end=${seg.srcEnd.toFixed(3)},asetpts=PTS-STARTPTS[m_seg_${j}];`;
+            const dur = seg.srcEnd - seg.srcStart;
+            // Apply 20ms fade-in/out to prevent clicks between concatenated segments.
+            // (Don't fade in the very first segment, don't fade out the very last)
+            const fadeDur = 0.02;
+            const fIn = j > 0 ? `afade=t=in:st=0:d=${fadeDur}` : '';
+            const fOut = j < n - 1 ? `afade=t=out:st=${Math.max(0, dur - fadeDur).toFixed(3)}:d=${fadeDur}` : '';
+            const fadeFilters = [fIn, fOut].filter(Boolean).join(',');
+            const comma = fadeFilters ? ',' : '';
+            filter += `[m_src_${j}]atrim=start=${seg.srcStart.toFixed(3)}:end=${seg.srcEnd.toFixed(3)},asetpts=PTS-STARTPTS${comma}${fadeFilters}[m_seg_${j}];`;
             concatIns.push(`[m_seg_${j}]`);
           }
           filter += `${concatIns.join('')}concat=n=${n}:v=0:a=1[main_edited];`;
@@ -174,36 +181,80 @@ async function stitchVideo(projectId: string, exportId: string) {
     filter += `${mixLabels.join('')}amix=inputs=${mixLabels.length}:dropout_transition=0`;
     filter += `,volume=${mixLabels.length},alimiter=limit=0.9[aout]`;
 
-    filterComplex = ` -filter_complex "${filter}"`;
-    audioMap = '-map 0:v -map "[aout]"';
-  } else {
-    audioMap = '-map 0:v';
+    filterComplex = filter;
+    audioMap = ['-map', '0:v', '-map', '[aout]'];
   }
 
   const videoCodec = exportMode === 'web'
     ? (wantAlpha
-        ? '-c:v libvpx-vp9 -pix_fmt yuva420p -b:v 0 -crf 36 -deadline good -cpu-used 3 -row-mt 1 -tile-columns 2 -frame-parallel 0 -auto-alt-ref 0'
-        : '-c:v libx264 -preset medium -crf 23 -pix_fmt yuv420p -movflags +faststart')
+        ? ['-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-b:v', '0', '-crf', '36', '-deadline', 'good', '-cpu-used', '3', '-row-mt', '1', '-tile-columns', '2', '-frame-parallel', '0', '-auto-alt-ref', '0']
+        : [
+            '-c:v', 'libx264',
+            '-preset', 'slow',
+            '-profile:v', 'high',
+            '-level:v', '4.0',
+            '-crf', '21',
+            '-maxrate', '10000k',
+            '-bufsize', '20000k',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+          ])
     : (wantAlpha
-        ? '-c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le -alpha_bits 16 -vendor apl0'
-        : '-c:v libx264 -crf 18 -pix_fmt yuv420p');
+        ? ['-c:v', 'prores_ks', '-profile:v', '4444', '-pix_fmt', 'yuva444p10le', '-alpha_bits', '16', '-vendor', 'apl0']
+        : ['-c:v', 'libx264', '-preset', 'medium', '-profile:v', 'high', '-level:v', '4.0', '-crf', '18', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']);
   const audioCodec = exportMode === 'web'
-    ? (wantAlpha ? '-c:a libopus -b:a 96k' : '-c:a aac -b:a 128k')
-    : (wantAlpha ? '-c:a pcm_s16le' : '-c:a aac -b:a 192k');
-  // NOTE: exec is used here intentionally — the ffmpeg command requires shell
-  // features (complex filter_complex quoting). All inputs are server-controlled
-  // paths and numeric values, not user-supplied strings.
-  const cmd = `ffmpeg -y ${inputs}${filterComplex} ${audioMap} ${videoCodec} ${audioCodec} "${outPath}"`;
+    ? (wantAlpha ? ['-c:a', 'libopus', '-b:a', '96k'] : ['-c:a', 'aac', '-b:a', '96k'])
+    : (wantAlpha ? ['-c:a', 'pcm_s16le'] : ['-c:a', 'aac', '-b:a', '192k']);
+  if (filterComplex) ffmpegArgs.push('-filter_complex', filterComplex);
+  ffmpegArgs.push(...audioMap, ...videoCodec, ...audioCodec, outPath);
 
-  console.log(`[export] Stitching video (alpha=${wantAlpha}): ${cmd}`);
+  console.log(`[export] Stitching video (alpha=${wantAlpha}): ffmpeg ${ffmpegArgs.map((arg) => JSON.stringify(arg)).join(' ')}`);
   try {
-    await execAsync(cmd);
+    await runFfmpeg(ffmpegArgs);
     console.log(`[export] Video stitched successfully: ${outPath}`);
     return `${prefix || 'video'}.${ext}`;
   } catch (err) {
     console.error(`[export] FFMPEG failed:`, err);
     throw err;
   }
+}
+
+function runFfmpeg(args: string[]) {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn('ffmpeg', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    let stdout = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+      if (stdout.length > 64_000) stdout = stdout.slice(-64_000);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 64_000) stderr = stderr.slice(-64_000);
+    });
+    child.on('error', reject);
+    child.on('close', (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const details = stderr.trim() || stdout.trim() || `ffmpeg exited with code ${code ?? 'unknown'}${signal ? ` (signal ${signal})` : ''}`;
+      reject(new Error(details));
+    });
+  });
+}
+
+function cleanupExportFrames(dir: string) {
+  let deletedFrames = 0;
+  for (const entry of fs.readdirSync(dir)) {
+    if (!entry.toLowerCase().endsWith('.png')) continue;
+    fs.unlinkSync(path.join(dir, entry));
+    deletedFrames += 1;
+  }
+  return deletedFrames;
 }
 
 // ── routes ────────────────────────────────────────────────────────────────────
@@ -279,13 +330,19 @@ exportRoutes.post('/:id/exports/:exportId/finish', async (req, res) => {
 
   let videoFile = null;
   let stitchError = null;
+  let deletedFrames = 0;
   try {
     videoFile = await stitchVideo(id, eid);
     if (videoFile) {
       const updatedManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      if (updatedManifest?.exportMode === 'web') {
+        deletedFrames = cleanupExportFrames(dir);
+      }
       fs.writeFileSync(manifestPath, JSON.stringify({
         ...updatedManifest,
         videoFile,
+        cleanedFramesAt: deletedFrames > 0 ? new Date().toISOString() : updatedManifest.cleanedFramesAt,
+        deletedFrameCount: (updatedManifest.deletedFrameCount || 0) + deletedFrames,
       }, null, 2));
     }
   } catch (err) {
