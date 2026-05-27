@@ -10,8 +10,8 @@ import {
 } from '../lib/types';
 import { DEFAULT_LIMITER, type LimiterParams } from '../lib/AudioSource';
 import type { MusicParams } from '../lib/MusicPlayer';
-import { parseTranscript, type CaptionMode, type TranscriptData } from '../lib/transcript';
-import type { ProjectTaskStatus, MainTab, BgSubTab, VideoSubTab, AudioSubTab, GuideKey } from '../lib/constants';
+import { parseTranscript, type CaptionMode, type TranscriptData, type ClipCaptionEdits } from '../lib/transcript';
+import type { ProjectTaskStatus, MainTab, BgSubTab, VideoSubTab, VideoShaderSubTab, AudioSubTab, GuideKey } from '../lib/constants';
 import { snapToExportResolution } from '../lib/layoutUtils';
 import type { VideoRenderer } from '../lib/VideoRenderer';
 import {
@@ -38,6 +38,7 @@ export interface ProjectHandlerSetters {
   setMainTab: React.Dispatch<React.SetStateAction<MainTab>>;
   setBgSubTab: React.Dispatch<React.SetStateAction<BgSubTab>>;
   setVideoSubTab: React.Dispatch<React.SetStateAction<VideoSubTab>>;
+  setVideoShaderSubTab: React.Dispatch<React.SetStateAction<VideoShaderSubTab>>;
   setAudioSubTab: React.Dispatch<React.SetStateAction<AudioSubTab>>;
   setBg: React.Dispatch<React.SetStateAction<BackgroundParams>>;
   setBgDither: React.Dispatch<React.SetStateAction<DitherParams>>;
@@ -63,6 +64,7 @@ export interface ProjectHandlerSetters {
   setPlayheadSecond: React.Dispatch<React.SetStateAction<number>>;
   setTranscript: React.Dispatch<React.SetStateAction<TranscriptData | null>>;
   setTranscriptName: React.Dispatch<React.SetStateAction<string | null>>;
+  setCaptionClipEdits: React.Dispatch<React.SetStateAction<Record<string, ClipCaptionEdits>>>;
   setPlaying: React.Dispatch<React.SetStateAction<boolean>>;
   setAudioReactivity: React.Dispatch<React.SetStateAction<AudioReactivityParams>>;
   setMusicInfo: React.Dispatch<React.SetStateAction<{ name: string } | null>>;
@@ -71,6 +73,13 @@ export interface ProjectHandlerSetters {
   setMicroTimelines: React.Dispatch<React.SetStateAction<MicroTimeline[]>>;
   setSelectedClipId: React.Dispatch<React.SetStateAction<string | null>>;
   setPendingClipStart: React.Dispatch<React.SetStateAction<number | null>>;
+  setCustomCuts: React.Dispatch<React.SetStateAction<import('../lib/fillerDetector').CustomCut[]>>;
+  setJumpCutsEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  setJumpCutGapMs: React.Dispatch<React.SetStateAction<number>>;
+  setJumpCutPaddingMs: React.Dispatch<React.SetStateAction<number>>;
+  setCustomCutPaddingMs: React.Dispatch<React.SetStateAction<number>>;
+  setShowSilenceGaps: React.Dispatch<React.SetStateAction<boolean>>;
+  setShowFillerCuts: React.Dispatch<React.SetStateAction<boolean>>;
   addToast: (message: string, type?: Toast['type'], sticky?: boolean) => number;
 }
 
@@ -85,7 +94,8 @@ export function createHandleCreateProject(refs: ProjectHandlerRefs, setters: Pro
       s.setActiveProjectId(p.id);
       s.setMainTab('video');
       s.setBgSubTab('noise');
-      s.setVideoSubTab('levels');
+      s.setVideoSubTab('shader');
+      s.setVideoShaderSubTab('image');
       s.setBg(DEFAULT_BACKGROUND);
       s.setBgDither(DEFAULT_DITHER);
       s.setVid(DEFAULT_VIDEO);
@@ -106,6 +116,7 @@ export function createHandleCreateProject(refs: ProjectHandlerRefs, setters: Pro
       s.setPlayheadSecond(0);
       s.setTranscript(null);
       s.setTranscriptName(null);
+      s.setCaptionClipEdits({});
       s.setPlaying(false);
       mediaElRef.current?.pause();
       videoElRef.current = null;
@@ -154,6 +165,7 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
       s.setPlayheadSecond(0);
       s.setTranscript(null);
       s.setTranscriptName(null);
+      s.setCaptionClipEdits(proj.captionClipEdits && typeof proj.captionClipEdits === 'object' ? proj.captionClipEdits : {});
       if (proj.background) s.setBg(proj.background);
       if (proj.backgroundDither) s.setBgDither(proj.backgroundDither);
       if (proj.video) s.setVid(normalizeVideoShaderParams(proj.video));
@@ -187,7 +199,25 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
           }
         }
         if (proj.ui.bgSubTab) s.setBgSubTab(proj.ui.bgSubTab);
-        if (proj.ui.videoSubTab) s.setVideoSubTab(proj.ui.videoSubTab);
+        if (proj.ui.videoSubTab) {
+          if (proj.ui.videoSubTab === 'levels' || proj.ui.videoSubTab === 'tone' || proj.ui.videoSubTab === 'color' || proj.ui.videoSubTab === 'image' || proj.ui.videoSubTab === 'rez' || proj.ui.videoSubTab === 'distortion' || proj.ui.videoSubTab === 'dither' || proj.ui.videoSubTab === 'position') {
+            s.setVideoSubTab('shader');
+            s.setVideoShaderSubTab(
+              proj.ui.videoSubTab === 'levels' || proj.ui.videoSubTab === 'tone' || proj.ui.videoSubTab === 'color'
+                ? 'image'
+                : proj.ui.videoSubTab,
+            );
+          } else {
+            s.setVideoSubTab(proj.ui.videoSubTab);
+          }
+        }
+        if (proj.ui.videoShaderSubTab) {
+          s.setVideoShaderSubTab(
+            proj.ui.videoShaderSubTab === 'levels' || proj.ui.videoShaderSubTab === 'tone' || proj.ui.videoShaderSubTab === 'color'
+              ? 'image'
+              : proj.ui.videoShaderSubTab,
+          );
+        }
         if (proj.ui.audioSubTab) s.setAudioSubTab(proj.ui.audioSubTab);
         if (typeof proj.ui.muted === 'boolean') s.setMuted(proj.ui.muted);
         if (typeof proj.ui.mediaVolume === 'number') s.setMediaVolume(proj.ui.mediaVolume);
@@ -221,6 +251,19 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
         s.setSelectedClipId(null);
       }
       s.setPendingClipStart(null);
+
+      // custom skip ranges (filler/editorial cuts) + jump-cut prefs
+      s.setCustomCuts(Array.isArray(proj.customCuts) ? proj.customCuts : []);
+      if (proj.jumpCuts) {
+        if (typeof proj.jumpCuts.enabled === 'boolean') s.setJumpCutsEnabled(proj.jumpCuts.enabled);
+        if (typeof proj.jumpCuts.gapMs === 'number') s.setJumpCutGapMs(proj.jumpCuts.gapMs);
+        if (typeof proj.jumpCuts.paddingMs === 'number') s.setJumpCutPaddingMs(proj.jumpCuts.paddingMs);
+        if (typeof proj.jumpCuts.customPaddingMs === 'number') s.setCustomCutPaddingMs(proj.jumpCuts.customPaddingMs);
+        if (typeof proj.jumpCuts.showSilence === 'boolean') s.setShowSilenceGaps(proj.jumpCuts.showSilence);
+        if (typeof proj.jumpCuts.showFiller === 'boolean') s.setShowFillerCuts(proj.jumpCuts.showFiller);
+      } else {
+        s.setJumpCutsEnabled(false);
+      }
       // load video if present
       if (proj.hasVideo) {
         const url = getVideoUrl(id);

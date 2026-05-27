@@ -15,7 +15,7 @@ import {
   type ProjectMeta,
 } from '../lib/projectApi';
 import {
-  type MainTab, type BgSubTab, type VideoSubTab, type AudioSubTab, type CaptionsSubTab,
+  type MainTab, type BgSubTab, type VideoSubTab, type VideoShaderSubTab, type AudioSubTab, type CaptionsSubTab,
   type ProjectTaskStatus, type GuideKey,
   GUIDES,
 } from '../lib/constants';
@@ -40,7 +40,8 @@ export const App: React.FC = () => {
   // ---------- shared state ----------
   const [mainTab, setMainTab] = useState<MainTab>('background');
   const [bgSubTab, setBgSubTab] = useState<BgSubTab>('noise');
-  const [videoSubTab, setVideoSubTab] = useState<VideoSubTab>('levels');
+  const [videoSubTab, setVideoSubTab] = useState<VideoSubTab>('shader');
+  const [videoShaderSubTab, setVideoShaderSubTab] = useState<VideoShaderSubTab>('image');
   const [audioSubTab, setAudioSubTab] = useState<AudioSubTab>('music');
   const [captionsSubTab, setCaptionsSubTab] = useState<CaptionsSubTab>('captions');
   const [outroVolume, setOutroVolume] = useState(0.5);
@@ -249,6 +250,7 @@ export const App: React.FC = () => {
     customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
     showSilenceGaps, showFillerCuts,
     mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume,
+    videoShaderSubTab,
     projectHasVideo: !!activeProject?.hasVideo,
     projectHasAudio: !!activeProject?.hasAudio,
     videoInfoLoaded: !!videoInfo,
@@ -289,7 +291,8 @@ export const App: React.FC = () => {
   const projectRefs = { mediaElRef, videoElRef, audioElRef, audioSourceRef, videoRendererRef, musicElRef, musicPlayerRef };
   const projectSetters = {
     setProjects, setActiveProjectId, setProjectStatus,
-    setMainTab, setBgSubTab, setVideoSubTab, setAudioSubTab,
+      setMainTab, setBgSubTab, setVideoSubTab, setAudioSubTab,
+      setVideoShaderSubTab,
     setBg, setBgDither, setVid, setBgExport, setVidExport,
     setActiveGuide, setCropToGuide, setBgLayerOn, setBgOffMode, setBgOffColor, setVideoLayerOn, setCaptionsLayerOn, setMusicLayerOn,
     setCaptionMode, setCaptionStyle, setCaptionShader,
@@ -547,6 +550,9 @@ export const App: React.FC = () => {
         bg={bg} setBg={setBg} bgDither={bgDither} setBgDither={setBgDither}
         bgSubTab={bgSubTab} setBgSubTab={setBgSubTab}
         vid={vid} setVid={setVid} videoSubTab={videoSubTab} setVideoSubTab={setVideoSubTab}
+        videoShaderSubTab={videoShaderSubTab} setVideoShaderSubTab={setVideoShaderSubTab}
+        invertFinalOutput={!!activeExportParams.invertFinalOutput}
+        setInvertFinalOutput={(value) => setActiveExportParams((prev) => ({ ...prev, invertFinalOutput: value }))}
         onPickFile={onPickFile}
         onImportNativeMedia={importNativeFile}
         captionsSubTab={captionsSubTab} setCaptionsSubTab={setCaptionsSubTab}

@@ -56,6 +56,13 @@ export interface VideoShaderParams {
   gamma: number;
   saturation: number;
   clarity: number;
+  // rez / pixelation
+  rezEnabled: boolean;
+  rezCellWidth: number;
+  rezCellHeight: number;
+  rezColorLevels: number;
+  rezMix: number;
+  rezJitter: number;
   // position
   positionX: number;         // horizontal offset in UV (-1..1)
   positionY: number;         // vertical offset in UV (-1..1)
@@ -327,6 +334,12 @@ export const DEFAULT_VIDEO: VideoShaderParams = {
   gamma: 1.0,
   saturation: 1.0,
   clarity: 0.0,
+  rezEnabled: false,
+  rezCellWidth: 8,
+  rezCellHeight: 8,
+  rezColorLevels: 24,
+  rezMix: 1,
+  rezJitter: 0,
   positionX: 0,
   positionY: 0,
   positionRotation: 0,
@@ -411,6 +424,15 @@ export const DEFAULT_VIDEO_POSITION: Partial<VideoShaderParams> = {
   positionX: DEFAULT_VIDEO.positionX,
   positionY: DEFAULT_VIDEO.positionY,
   positionRotation: DEFAULT_VIDEO.positionRotation,
+};
+
+export const DEFAULT_VIDEO_REZ: Partial<VideoShaderParams> = {
+  rezEnabled: DEFAULT_VIDEO.rezEnabled,
+  rezCellWidth: DEFAULT_VIDEO.rezCellWidth,
+  rezCellHeight: DEFAULT_VIDEO.rezCellHeight,
+  rezColorLevels: DEFAULT_VIDEO.rezColorLevels,
+  rezMix: DEFAULT_VIDEO.rezMix,
+  rezJitter: DEFAULT_VIDEO.rezJitter,
 };
 
 export const DEFAULT_VIDEO_DISTORTION: Partial<VideoShaderParams> = {

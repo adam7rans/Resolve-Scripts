@@ -314,6 +314,37 @@ export const VideoColorSection: React.FC<{ value: VideoShaderParams; onChange: (
   );
 };
 
+export const VideoImageSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
+  const set = (patch: Partial<VideoShaderParams>) => onChange({ ...value, ...patch });
+  return (
+    <Section title="Image" onReset={onReset}>
+      <Slider label="brightness" value={value.brightness} min={0} max={3} step={0.01} onChange={(v) => set({ brightness: v })} />
+      <Slider label="contrast" value={value.contrast} min={0} max={4} step={0.01} onChange={(v) => set({ contrast: v })} />
+      <Slider label="exposure" value={value.exposure} min={-3} max={3} step={0.05} onChange={(v) => set({ exposure: v })} />
+      <Slider label="shadows" value={value.shadows} min={-0.5} max={0.5} step={0.01} onChange={(v) => set({ shadows: v })} />
+      <Slider label="highlights" value={value.highlights} min={-0.5} max={0.5} step={0.01} onChange={(v) => set({ highlights: v })} />
+      <Slider label="saturation" value={value.saturation} min={0} max={3} step={0.01} onChange={(v) => set({ saturation: v })} />
+    </Section>
+  );
+};
+
+export const VideoRezSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
+  const set = (patch: Partial<VideoShaderParams>) => onChange({ ...value, ...patch });
+  return (
+    <Section title="Rez" onReset={onReset} enabled={value.rezEnabled} onToggle={(v) => set({ rezEnabled: v })}>
+      {value.rezEnabled && (
+        <>
+          <Slider label="cell width" value={value.rezCellWidth} min={1} max={128} step={1} onChange={(v) => set({ rezCellWidth: Math.round(v) })} />
+          <Slider label="cell height" value={value.rezCellHeight} min={1} max={128} step={1} onChange={(v) => set({ rezCellHeight: Math.round(v) })} />
+          <Slider label="mix" value={value.rezMix} min={0} max={1} step={0.01} onChange={(v) => set({ rezMix: v })} />
+          <Slider label="color steps" value={value.rezColorLevels} min={2} max={64} step={1} onChange={(v) => set({ rezColorLevels: Math.round(v) })} />
+          <Slider label="sample jitter" value={value.rezJitter} min={0} max={1} step={0.01} onChange={(v) => set({ rezJitter: v })} />
+        </>
+      )}
+    </Section>
+  );
+};
+
 export const VideoPositionSection: React.FC<{ value: VideoShaderParams; onChange: (v: VideoShaderParams) => void } & WithReset> = ({ value, onChange, onReset }) => {
   const set = (patch: Partial<VideoShaderParams>) => onChange({ ...value, ...patch });
   return (

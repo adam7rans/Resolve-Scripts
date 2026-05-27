@@ -9,7 +9,7 @@ import type { CaptionMode, TranscriptData } from '../../lib/transcript';
 import type { CustomCut } from '../../lib/fillerDetector';
 import { detectFillerCuts } from '../../lib/fillerDetector';
 import type {
-  MainTab, BgSubTab, VideoSubTab, AudioSubTab, CaptionsSubTab,
+  MainTab, BgSubTab, VideoSubTab, VideoShaderSubTab, AudioSubTab, CaptionsSubTab,
   ProjectTaskStatus, GuideKey,
 } from '../../lib/constants';
 import { GUIDES } from '../../lib/constants';
@@ -95,6 +95,10 @@ interface Props {
   setVid: React.Dispatch<React.SetStateAction<VideoShaderParams>>;
   videoSubTab: VideoSubTab;
   setVideoSubTab: React.Dispatch<React.SetStateAction<VideoSubTab>>;
+  videoShaderSubTab: VideoShaderSubTab;
+  setVideoShaderSubTab: React.Dispatch<React.SetStateAction<VideoShaderSubTab>>;
+  invertFinalOutput: boolean;
+  setInvertFinalOutput: (value: boolean) => void;
   onPickFile: React.ChangeEventHandler<HTMLInputElement>;
   onImportNativeMedia: () => void;
   // captions tab
@@ -412,6 +416,8 @@ export const SidebarPanel: React.FC<Props> = (p) => (
         <VideoPanel
           vid={p.vid} setVid={p.setVid}
           videoSubTab={p.videoSubTab} setVideoSubTab={p.setVideoSubTab}
+          videoShaderSubTab={p.videoShaderSubTab} setVideoShaderSubTab={p.setVideoShaderSubTab}
+          invertFinalOutput={p.invertFinalOutput} setInvertFinalOutput={p.setInvertFinalOutput}
           videoInfo={p.videoInfo} audioInfo={p.audioInfo}
           audioMode={p.audioMode} onPickFile={p.onPickFile} onImportNativeMedia={p.onImportNativeMedia}
         />

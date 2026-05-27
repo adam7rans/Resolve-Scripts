@@ -5,11 +5,12 @@ import {
   listProjects, saveSettings, getTranscript, openEventStream,
   type ProjectMeta,
 } from '../lib/projectApi';
-import type { ProjectTaskStatus, MainTab, BgSubTab, VideoSubTab, AudioSubTab, GuideKey } from '../lib/constants';
+import type { ProjectTaskStatus, MainTab, BgSubTab, VideoSubTab, VideoShaderSubTab, AudioSubTab, GuideKey } from '../lib/constants';
 import type {
   BackgroundParams, DitherParams, VideoShaderParams, ExportParams,
   CaptionStyle, AudioReactivityParams, CaptionShaderParams, MicroTimeline,
 } from '../lib/types';
+import type { CustomCut } from '../lib/fillerDetector';
 import type { LimiterParams } from '../lib/AudioSource';
 import type { MusicParams } from '../lib/MusicPlayer';
 import type { Toast } from '../components/StatusToast';
@@ -100,9 +101,17 @@ export interface AutoSaveSettings {
   vidExport: ExportParams;
   microTimelines: MicroTimeline[];
   selectedClipId: string | null;
+  customCuts: CustomCut[];
+  jumpCutsEnabled: boolean;
+  jumpCutGapMs: number;
+  jumpCutPaddingMs: number;
+  customCutPaddingMs: number;
+  showSilenceGaps: boolean;
+  showFillerCuts: boolean;
   mainTab: MainTab;
   bgSubTab: BgSubTab;
   videoSubTab: VideoSubTab;
+  videoShaderSubTab: VideoShaderSubTab;
   audioSubTab: AudioSubTab;
   muted: boolean;
   mediaVolume: number;
@@ -122,7 +131,9 @@ export function useAutoSave(activeProjectId: string | null, settings: AutoSaveSe
     bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn,
     activeGuide, cropToGuide, bgExport, vidExport,
     microTimelines, selectedClipId,
-    mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume,
+    customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
+    showSilenceGaps, showFillerCuts,
+    mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, muted, mediaVolume, outroVolume,
     projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded,
   } = settings;
 
@@ -142,10 +153,12 @@ export function useAutoSave(activeProjectId: string | null, settings: AutoSaveSe
         layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn, music: musicLayerOn, bgOffMode, bgOffColor },
         activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
         microTimelines, selectedClipId,
-        ui: { mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume },
+        jumpCuts: { enabled: jumpCutsEnabled, gapMs: jumpCutGapMs, paddingMs: jumpCutPaddingMs, customPaddingMs: customCutPaddingMs, showSilence: showSilenceGaps, showFiller: showFillerCuts },
+        customCuts,
+        ui: { mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, muted, mediaVolume, outroVolume },
       }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, microTimelines, selectedClipId, mainTab, bgSubTab, videoSubTab, audioSubTab, muted, mediaVolume, outroVolume, projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded]);
+  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, microTimelines, selectedClipId, customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs, showSilenceGaps, showFillerCuts, mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, muted, mediaVolume, outroVolume, projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded]);
 }
 
 /**

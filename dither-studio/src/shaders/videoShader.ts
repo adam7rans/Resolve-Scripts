@@ -37,6 +37,12 @@ uniform float uHighlights;
 uniform float uSaturation; // Color saturation control
 uniform float uExposure; // Exposure adjustment
 uniform float uClarity; // Mid-tone contrast boost
+uniform bool uRezEnabled;
+uniform float uRezCellWidth;
+uniform float uRezCellHeight;
+uniform float uRezColorLevels;
+uniform float uRezMix;
+uniform float uRezJitter;
 uniform int uDitherType;
 uniform float uErrorDiffusion;
 uniform float uThreshold;
@@ -150,6 +156,13 @@ float getBayer8x8(vec2 coord) {
 // Random dithering
 float random(vec2 coord) {
   return fract(sin(dot(coord, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+vec2 random2(vec2 coord) {
+  return vec2(
+    random(coord + vec2(13.1, 91.7)),
+    random(coord + vec2(71.7, 29.3))
+  );
 }
 
 // Blue noise approximation
@@ -282,8 +295,22 @@ void main() {
   // Clamp UV coordinates to prevent sampling outside texture
   distortedUv = clamp(distortedUv, 0.0, 1.0);
 
-  vec2 coord = distortedUv * uResolution * uDitherScale;
-  vec4 texColor = texture2D(tDiffuse, distortedUv);
+  vec2 sampleUv = distortedUv;
+  if (uRezEnabled) {
+    vec2 cellSize = vec2(max(1.0, uRezCellWidth), max(1.0, uRezCellHeight));
+    vec2 pixelCoord = distortedUv * uResolution;
+    vec2 cellIndex = floor(pixelCoord / cellSize);
+    vec2 snappedPx = (cellIndex + 0.5) * cellSize;
+    if (uRezJitter > 0.0) {
+      vec2 jitter = (random2(cellIndex) - 0.5) * cellSize * uRezJitter;
+      snappedPx += jitter;
+    }
+    vec2 snappedUv = clamp(snappedPx / uResolution, 0.0, 1.0);
+    sampleUv = mix(distortedUv, snappedUv, clamp(uRezMix, 0.0, 1.0));
+  }
+
+  vec2 coord = sampleUv * uResolution * uDitherScale;
+  vec4 texColor = texture2D(tDiffuse, sampleUv);
 
   // Pre-shader gradient overlay: composited onto video before all processing
   if (uGradientEnabled) {
@@ -370,6 +397,11 @@ void main() {
     toneColor = mix(vec3(gray), toneColor, uSaturation);
   }
 
+  if (uRezEnabled) {
+    float rezLevels = max(2.0, uRezColorLevels);
+    toneColor = floor(toneColor * (rezLevels - 1.0) + 0.5) / (rezLevels - 1.0);
+  }
+
   // Early return if dithering is disabled - output tonal-adjusted video
   if (!uDitherEnabled) {
     gl_FragColor = vec4(toneColor, 1.0);
@@ -453,6 +485,12 @@ export const dancingVideoShaderUniforms = {
   uSaturation: { value: 1.0 },
   uExposure: { value: 0.0 },
   uClarity: { value: 0.0 },
+  uRezEnabled: { value: false },
+  uRezCellWidth: { value: 8.0 },
+  uRezCellHeight: { value: 8.0 },
+  uRezColorLevels: { value: 24.0 },
+  uRezMix: { value: 1.0 },
+  uRezJitter: { value: 0.0 },
   uDitherType: { value: 1 }, // Default to Bayer 4x4
   uErrorDiffusion: { value: 1.0 },
   uThreshold: { value: 0.5 },

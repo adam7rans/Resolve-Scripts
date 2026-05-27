@@ -113,6 +113,12 @@ export class VideoRenderer {
     u.uGamma.value = p.gamma;
     u.uSaturation.value = p.saturation;
     u.uClarity.value = p.clarity;
+    u.uRezEnabled.value = p.rezEnabled;
+    u.uRezCellWidth.value = p.rezCellWidth;
+    u.uRezCellHeight.value = p.rezCellHeight;
+    u.uRezColorLevels.value = p.rezColorLevels;
+    u.uRezMix.value = p.rezMix;
+    u.uRezJitter.value = p.rezJitter;
     u.uPositionX.value = p.positionX;
     u.uPositionY.value = p.positionY;
     u.uPositionRotation.value = p.positionRotation;
