@@ -170,6 +170,32 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   };
   const resetView = () => setView({ s: 0, e: projectDuration });
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const ae = document.activeElement as HTMLElement | null;
+      const isTextEntry =
+        ae?.tagName === 'INPUT' ||
+        ae?.tagName === 'TEXTAREA' ||
+        ae?.tagName === 'SELECT' ||
+        ae?.isContentEditable;
+      if (isTextEntry) return;
+
+      if (e.key === '=') {
+        e.preventDefault();
+        zoomIn();
+        return;
+      }
+      if (e.key === '-') {
+        e.preventDefault();
+        zoomOut();
+      }
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [playhead, projectDuration, viewSpan]);
+
   const scrollThumbPct = (viewSpan / projectDuration) * 100;
   const scrollThumbLeftPct = (viewStart / projectDuration) * 100;
 

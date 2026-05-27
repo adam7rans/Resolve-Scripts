@@ -1,4 +1,4 @@
-export type MainTab = 'background' | 'video' | 'captions' | 'audio' | 'export';
+export type MainTab = 'background' | 'video' | 'captions' | 'audio' | 'editor' | 'export';
 export type BgSubTab = 'noise' | 'dither';
 export type VideoSubTab = 'shader' | 'gradient' | 'settings';
 export type VideoShaderSubTab = 'image' | 'rez' | 'distortion' | 'dither' | 'position';

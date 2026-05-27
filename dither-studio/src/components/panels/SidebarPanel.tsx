@@ -7,7 +7,6 @@ import type {
 } from '../../lib/types';
 import type { CaptionMode, TranscriptData } from '../../lib/transcript';
 import type { CustomCut } from '../../lib/fillerDetector';
-import { detectFillerCuts } from '../../lib/fillerDetector';
 import type {
   MainTab, BgSubTab, VideoSubTab, VideoShaderSubTab, AudioSubTab, CaptionsSubTab,
   ProjectTaskStatus, GuideKey,
@@ -25,6 +24,7 @@ import { ImportPresetPanel } from '../ImportPresetPanel';
 import { BackgroundPanel } from './BackgroundPanel';
 import { VideoPanel } from './VideoPanel';
 import { CaptionsPanel } from './CaptionsPanel';
+import { EditorPanel } from './EditorPanel';
 
 interface Props {
   // project
@@ -38,6 +38,7 @@ interface Props {
   videoInfo: { name: string; duration: number; w: number; h: number } | null;
   audioInfo: { name: string; duration: number } | null;
   audioMode: boolean;
+  playheadSecond: number;
   // playback
   playing: boolean;
   togglePlay: () => void;
@@ -59,8 +60,21 @@ interface Props {
   setShowSilenceGaps: React.Dispatch<React.SetStateAction<boolean>>;
   showFillerCuts: boolean;
   setShowFillerCuts: React.Dispatch<React.SetStateAction<boolean>>;
+  showManualCuts: boolean;
+  setShowManualCuts: React.Dispatch<React.SetStateAction<boolean>>;
   onAddCustomCuts: (cuts: CustomCut[]) => void;
   onClearCustomCuts: () => void;
+  pendingCustomCutStartMs: number | null;
+  onStartCustomCut: (playheadMs: number) => void;
+  onFinishCustomCut: (playheadMs: number) => void;
+  onCancelPendingCustomCut: () => void;
+  selectedGap: { startMs: number; endMs: number; key: string; kind?: 'silence' | 'custom'; label?: string } | null;
+  selectedGapDisabled: boolean;
+  selectedGapHasOverride: boolean;
+  onAdjustSelectedGap: (startMs: number, endMs: number) => void;
+  onToggleSelectedGapDisabled: (key: string) => void;
+  onResetSelectedGap: (key: string) => void;
+  onRemoveSelectedCustomCut: (key: string) => void;
   // layers
   bgLayerOn: boolean;
   setBgLayerOn: React.Dispatch<React.SetStateAction<boolean>>;
@@ -185,178 +199,6 @@ export const SidebarPanel: React.FC<Props> = (p) => (
         </div>
       )}
 
-      {/* media transport row 2: skip silence */}
-      {(p.videoInfo || p.audioInfo) && (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a' }}>
-          <button
-            onClick={() => p.setJumpCutsEnabled((v) => !v)}
-            disabled={!p.transcript}
-            title={
-              !p.transcript
-                ? 'Load a transcript to enable jump cuts'
-                : p.jumpCutsEnabled
-                  ? 'Jump cuts ON — silences are skipped during playback'
-                  : 'Jump cuts OFF'
-            }
-            style={{
-              background: p.jumpCutsEnabled ? '#1f6feb' : '#1a1a1a',
-              color: !p.transcript ? '#444' : p.jumpCutsEnabled ? '#fff' : '#ddd',
-              border: '1px solid #2a2a2a',
-              padding: '4px 8px',
-              borderRadius: 3,
-              cursor: !p.transcript ? 'not-allowed' : 'pointer',
-              fontFamily: 'inherit',
-              opacity: !p.transcript ? 0.5 : 1,
-              flexShrink: 0,
-            }}
-          >
-            ✂ Skip silence
-          </button>
-          <button
-            onClick={() => p.setShowSilenceGaps((v) => !v)}
-            disabled={!p.transcript || !p.jumpCutsEnabled}
-            title={p.showSilenceGaps ? 'Hide silence gaps on timeline' : 'Show silence gaps on timeline'}
-            style={{
-              background: 'transparent',
-              color: !p.transcript || !p.jumpCutsEnabled ? '#333' : p.showSilenceGaps ? 'rgba(255,180,80,0.9)' : '#555',
-              border: 'none',
-              padding: '2px 4px',
-              cursor: !p.transcript || !p.jumpCutsEnabled ? 'not-allowed' : 'pointer',
-              fontSize: 14,
-              flexShrink: 0,
-              lineHeight: 1,
-            }}
-          >
-            {p.showSilenceGaps ? '👁' : '👁‍🗨'}
-          </button>
-          <input
-            type="number"
-            min={50}
-            step={50}
-            value={p.jumpCutGapMs}
-            onChange={(e) => {
-              const n = Number(e.target.value);
-              if (Number.isFinite(n) && n > 0) p.setJumpCutGapMs(Math.max(50, Math.floor(n)));
-            }}
-            disabled={!p.transcript || !p.jumpCutsEnabled}
-            title="Minimum gap between words to skip (ms)"
-            style={{
-              width: 60,
-              background: '#0d0d0d',
-              color: !p.transcript || !p.jumpCutsEnabled ? '#555' : '#ddd',
-              border: '1px solid #2a2a2a',
-              padding: '3px 6px',
-              borderRadius: 3,
-              fontFamily: 'inherit',
-              fontSize: 11,
-            }}
-          />
-          <span style={{ color: '#666', fontSize: 11 }}>ms</span>
-          <span style={{ color: '#333', fontSize: 11 }}>|</span>
-          <span style={{ color: !p.transcript || !p.jumpCutsEnabled ? '#444' : '#777', fontSize: 11, whiteSpace: 'nowrap' }}>tighten</span>
-          <input
-            type="range"
-            min={0}
-            max={1000}
-            step={50}
-            value={p.jumpCutPaddingMs}
-            onChange={(e) => p.setJumpCutPaddingMs(Number(e.target.value))}
-            disabled={!p.transcript || !p.jumpCutsEnabled}
-            title={`Shrink each skip zone by ${p.jumpCutPaddingMs}ms on each side`}
-            style={{ flex: 1, accentColor: '#1f6feb', opacity: !p.transcript || !p.jumpCutsEnabled ? 0.25 : 1 }}
-          />
-          <span style={{ color: !p.transcript || !p.jumpCutsEnabled ? '#444' : '#aaa', fontSize: 11, minWidth: 40, textAlign: 'right' }}>
-            ±{p.jumpCutPaddingMs}ms
-          </span>
-        </div>
-      )}
-
-      {/* media transport row 3: filler / custom cuts */}
-      {(p.videoInfo || p.audioInfo) && (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a' }}>
-          <button
-            onClick={() => {
-              if (!p.transcript) return;
-              const cuts = detectFillerCuts(p.transcript);
-              p.onAddCustomCuts(cuts);
-            }}
-            disabled={!p.transcript}
-            title={
-              !p.transcript
-                ? 'Load a transcript to auto-strip filler'
-                : 'Scan transcript for filler phrases ("you know", "I mean", stutter repeats) and add them as skip ranges'
-            }
-            style={{
-              background: '#1a1a1a',
-              color: !p.transcript ? '#444' : '#ddd',
-              border: '1px solid #2a2a2a',
-              padding: '4px 8px',
-              borderRadius: 3,
-              cursor: !p.transcript ? 'not-allowed' : 'pointer',
-              fontFamily: 'inherit',
-              opacity: !p.transcript ? 0.5 : 1,
-              flexShrink: 0,
-            }}
-          >
-            ✂ Auto-strip filler
-          </button>
-          <button
-            onClick={() => p.setShowFillerCuts((v) => !v)}
-            disabled={!p.jumpCutsEnabled || p.customCuts.length === 0}
-            title={p.showFillerCuts ? 'Hide filler cuts on timeline' : 'Show filler cuts on timeline'}
-            style={{
-              background: 'transparent',
-              color: !p.jumpCutsEnabled || p.customCuts.length === 0 ? '#333' : p.showFillerCuts ? 'rgba(48,209,88,0.9)' : '#555',
-              border: 'none',
-              padding: '2px 4px',
-              cursor: !p.jumpCutsEnabled || p.customCuts.length === 0 ? 'not-allowed' : 'pointer',
-              fontSize: 14,
-              flexShrink: 0,
-              lineHeight: 1,
-            }}
-          >
-            {p.showFillerCuts ? '👁' : '👁‍🗨'}
-          </button>
-          <span style={{ color: '#666', fontSize: 11 }}>
-            {p.customCuts.length > 0 ? `${p.customCuts.length} custom cuts` : 'no custom cuts'}
-          </span>
-          {p.customCuts.length > 0 && (
-            <button
-              onClick={p.onClearCustomCuts}
-              title="Remove all custom cuts (silence skip stays untouched)"
-              style={{
-                background: '#1a1a1a', color: '#aaa', border: '1px solid #2a2a2a',
-                padding: '4px 8px', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit',
-                marginLeft: 'auto', flexShrink: 0,
-              }}
-            >
-              Clear cuts
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* media transport row 4: filler tighten slider */}
-      {(p.videoInfo || p.audioInfo) && p.customCuts.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a' }}>
-          <span style={{ color: !p.jumpCutsEnabled ? '#444' : '#777', fontSize: 11, whiteSpace: 'nowrap', flexShrink: 0 }}>Tighten cuts</span>
-          <input
-            type="range"
-            min={0}
-            max={500}
-            step={10}
-            value={p.customCutPaddingMs}
-            onChange={(e) => p.setCustomCutPaddingMs(Number(e.target.value))}
-            disabled={!p.jumpCutsEnabled}
-            title={`Expand each filler/editorial cut by ${p.customCutPaddingMs}ms on each side`}
-            style={{ flex: 1, accentColor: '#30d158', opacity: !p.jumpCutsEnabled ? 0.25 : 1 }}
-          />
-          <span style={{ color: !p.jumpCutsEnabled ? '#444' : '#aaa', fontSize: 11, minWidth: 45, textAlign: 'right' }}>
-            ±{p.customCutPaddingMs}ms
-          </span>
-        </div>
-      )}
-
       {/* layer toggles */}
       <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderBottom: '1px solid #1f1f1f', background: '#0a0a0a', alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ color: '#666', textTransform: 'uppercase', letterSpacing: 1, marginRight: 4 }}>Layers</span>
@@ -392,6 +234,7 @@ export const SidebarPanel: React.FC<Props> = (p) => (
           { value: 'video',      label: p.audioMode ? 'Source' : 'Video' },
           { value: 'captions',   label: 'Captions' },
           { value: 'audio',      label: 'Audio' },
+          { value: 'editor',     label: 'Editor' },
           { value: 'export',     label: 'Export' },
         ]}
         value={p.mainTab}
@@ -475,6 +318,42 @@ export const SidebarPanel: React.FC<Props> = (p) => (
             />
           )}
         </>
+      )}
+
+      {p.mainTab === 'editor' && (
+        <EditorPanel
+          transcript={p.transcript}
+          hasMedia={!!(p.videoInfo || p.audioInfo)}
+          playheadSecond={p.playheadSecond}
+          jumpCutsEnabled={p.jumpCutsEnabled}
+          setJumpCutsEnabled={p.setJumpCutsEnabled}
+          jumpCutGapMs={p.jumpCutGapMs}
+          setJumpCutGapMs={p.setJumpCutGapMs}
+          jumpCutPaddingMs={p.jumpCutPaddingMs}
+          setJumpCutPaddingMs={p.setJumpCutPaddingMs}
+          customCuts={p.customCuts}
+          customCutPaddingMs={p.customCutPaddingMs}
+          setCustomCutPaddingMs={p.setCustomCutPaddingMs}
+          showSilenceGaps={p.showSilenceGaps}
+          setShowSilenceGaps={p.setShowSilenceGaps}
+          showFillerCuts={p.showFillerCuts}
+          setShowFillerCuts={p.setShowFillerCuts}
+          showManualCuts={p.showManualCuts}
+          setShowManualCuts={p.setShowManualCuts}
+          onAddCustomCuts={p.onAddCustomCuts}
+          onClearCustomCuts={p.onClearCustomCuts}
+          pendingCustomCutStartMs={p.pendingCustomCutStartMs}
+          onStartCustomCut={p.onStartCustomCut}
+          onFinishCustomCut={p.onFinishCustomCut}
+          onCancelPendingCustomCut={p.onCancelPendingCustomCut}
+          selectedGap={p.selectedGap}
+          selectedGapDisabled={p.selectedGapDisabled}
+          selectedGapHasOverride={p.selectedGapHasOverride}
+          onAdjustSelectedGap={p.onAdjustSelectedGap}
+          onToggleSelectedGapDisabled={p.onToggleSelectedGapDisabled}
+          onResetSelectedGap={p.onResetSelectedGap}
+          onRemoveSelectedCustomCut={p.onRemoveSelectedCustomCut}
+        />
       )}
 
       {p.mainTab === 'export' && (

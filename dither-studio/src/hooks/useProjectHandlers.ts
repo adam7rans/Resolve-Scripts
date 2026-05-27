@@ -81,6 +81,7 @@ export interface ProjectHandlerSetters {
   setCustomCutPaddingMs: React.Dispatch<React.SetStateAction<number>>;
   setShowSilenceGaps: React.Dispatch<React.SetStateAction<boolean>>;
   setShowFillerCuts: React.Dispatch<React.SetStateAction<boolean>>;
+  setShowManualCuts: React.Dispatch<React.SetStateAction<boolean>>;
   addToast: (message: string, type?: Toast['type'], sticky?: boolean) => number;
 }
 
@@ -259,6 +260,9 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
 
       // custom skip ranges (filler/editorial cuts) + jump-cut prefs
       s.setCustomCuts(Array.isArray(proj.customCuts) ? proj.customCuts : []);
+      s.setShowSilenceGaps(false);
+      s.setShowFillerCuts(false);
+      s.setShowManualCuts(false);
       if (proj.jumpCuts) {
         if (typeof proj.jumpCuts.enabled === 'boolean') s.setJumpCutsEnabled(proj.jumpCuts.enabled);
         if (typeof proj.jumpCuts.gapMs === 'number') s.setJumpCutGapMs(proj.jumpCuts.gapMs);
@@ -266,6 +270,8 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
         if (typeof proj.jumpCuts.customPaddingMs === 'number') s.setCustomCutPaddingMs(proj.jumpCuts.customPaddingMs);
         if (typeof proj.jumpCuts.showSilence === 'boolean') s.setShowSilenceGaps(proj.jumpCuts.showSilence);
         if (typeof proj.jumpCuts.showFiller === 'boolean') s.setShowFillerCuts(proj.jumpCuts.showFiller);
+        if (typeof proj.jumpCuts.showManual === 'boolean') s.setShowManualCuts(proj.jumpCuts.showManual);
+        else if (proj.jumpCuts.enabled && Array.isArray(proj.customCuts) && proj.customCuts.some((cut: any) => String(cut.key || '').startsWith('editorial:') || String(cut.key || '').startsWith('custom:'))) s.setShowManualCuts(true);
       } else {
         s.setJumpCutsEnabled(false);
       }

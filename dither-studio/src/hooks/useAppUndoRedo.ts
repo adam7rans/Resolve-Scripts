@@ -23,7 +23,7 @@ export type SettingsSnapshot = {
   customCuts: CustomCut[];
   jumpCutsEnabled: boolean; jumpCutGapMs: number;
   jumpCutPaddingMs: number; customCutPaddingMs: number;
-  showSilenceGaps: boolean; showFillerCuts: boolean;
+  showSilenceGaps: boolean; showFillerCuts: boolean; showManualCuts: boolean;
   muted: boolean; mediaVolume: number; outroVolume: number;
 };
 
@@ -58,6 +58,7 @@ export interface UndoSetters {
   setCustomCutPaddingMs: React.Dispatch<React.SetStateAction<number>>;
   setShowSilenceGaps: React.Dispatch<React.SetStateAction<boolean>>;
   setShowFillerCuts: React.Dispatch<React.SetStateAction<boolean>>;
+  setShowManualCuts: React.Dispatch<React.SetStateAction<boolean>>;
   setMuted: React.Dispatch<React.SetStateAction<boolean>>;
   setMediaVolume: React.Dispatch<React.SetStateAction<number>>;
   setOutroVolume: React.Dispatch<React.SetStateAction<number>>;
@@ -93,7 +94,7 @@ export function useAppUndoRedo(
     s.setCustomCuts(snap.customCuts);
     s.setJumpCutsEnabled(snap.jumpCutsEnabled); s.setJumpCutGapMs(snap.jumpCutGapMs);
     s.setJumpCutPaddingMs(snap.jumpCutPaddingMs); s.setCustomCutPaddingMs(snap.customCutPaddingMs);
-    s.setShowSilenceGaps(snap.showSilenceGaps); s.setShowFillerCuts(snap.showFillerCuts);
+    s.setShowSilenceGaps(snap.showSilenceGaps); s.setShowFillerCuts(snap.showFillerCuts); s.setShowManualCuts(snap.showManualCuts);
     s.setMuted(snap.muted); s.setMediaVolume(snap.mediaVolume); s.setOutroVolume(snap.outroVolume);
   };
   const restoreRef = useRef(restore);
@@ -110,7 +111,7 @@ export function useAppUndoRedo(
     activeGuide, cropToGuide, bgExport, vidExport,
     microTimelines, selectedClipId, customCuts,
     jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
-    showSilenceGaps, showFillerCuts, muted, mediaVolume, outroVolume,
+    showSilenceGaps, showFillerCuts, showManualCuts, muted, mediaVolume, outroVolume,
   } = state;
 
   useEffect(() => {
@@ -122,7 +123,7 @@ export function useAppUndoRedo(
     activeGuide, cropToGuide, bgExport, vidExport,
     microTimelines, selectedClipId, customCuts,
     jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
-    showSilenceGaps, showFillerCuts, muted, mediaVolume, outroVolume,
+    showSilenceGaps, showFillerCuts, showManualCuts, muted, mediaVolume, outroVolume,
   ]);
 
   // Clear history on project switch so undo doesn't cross project boundaries.

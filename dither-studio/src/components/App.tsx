@@ -35,6 +35,7 @@ import { useClipHandlers } from '../hooks/useClipHandlers';
 import { useRefSync, useParamPush } from '../hooks/useParamSync';
 import { SidebarPanel } from './panels/SidebarPanel';
 import { PreviewArea } from './PreviewArea';
+import { isCustomKey } from '../hooks/useJumpCuts';
 
 export const App: React.FC = () => {
   // ---------- shared state ----------
@@ -90,6 +91,7 @@ export const App: React.FC = () => {
     customCutPaddingMs, setCustomCutPaddingMs,
     showSilenceGaps, setShowSilenceGaps,
     showFillerCuts, setShowFillerCuts,
+    showManualCuts, setShowManualCuts,
     jumpCutGapOverrides,
     jumpCutGapDisabled,
     selectedGapKey,
@@ -98,11 +100,16 @@ export const App: React.FC = () => {
     jumpCutsEnabledRef,
     jumpCutGapListRef,
     customCuts, setCustomCuts,
+    pendingCustomCutStartMs,
     handleAdjustGap,
     handleResetGap,
     handleResetAllGaps,
     handleAddCustomCuts,
     handleClearCustomCuts,
+    handleStartCustomCut,
+    handleCancelPendingCustomCut,
+    handleFinishCustomCut,
+    handleRemoveCustomCut,
     handleToggleGapDisabled,
     handleSelectGap,
   } = jumpCuts;
@@ -147,6 +154,7 @@ export const App: React.FC = () => {
   const baseExportParams = videoInfo ? vidExport : bgExport;
   const setBaseExportParams = videoInfo ? setVidExport : setBgExport;
   const selectedClip = microTimelines.find(mt => mt.id === selectedClipId) ?? null;
+  const selectedGap = jumpCutGaps.find((gap) => gap.key === selectedGapKey) ?? null;
   const effectiveTranscript = useMemo(
     () => (transcript && selectedClip ? applyClipCaptionEdits(transcript, captionClipEdits[selectedClip.id]) : transcript),
     [transcript, selectedClip, captionClipEdits],
@@ -248,7 +256,7 @@ export const App: React.FC = () => {
     activeGuide, cropToGuide, bgExport, vidExport,
     microTimelines, selectedClipId,
     customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
-    showSilenceGaps, showFillerCuts,
+    showSilenceGaps, showFillerCuts, showManualCuts,
     mainTab, bgSubTab, videoSubTab, audioSubTab, captionsSubTab, muted, mediaVolume, outroVolume,
     videoShaderSubTab,
     projectHasVideo: !!activeProject?.hasVideo,
@@ -266,7 +274,7 @@ export const App: React.FC = () => {
       activeGuide, cropToGuide, bgExport, vidExport,
       microTimelines, selectedClipId, customCuts,
       jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
-      showSilenceGaps, showFillerCuts, muted, mediaVolume, outroVolume,
+      showSilenceGaps, showFillerCuts, showManualCuts, muted, mediaVolume, outroVolume,
     },
     {
       setBg, setBgDither, setVid, setAudioReactivity, setMusic, setLimiter,
@@ -275,7 +283,7 @@ export const App: React.FC = () => {
       setActiveGuide, setCropToGuide, setBgExport, setVidExport,
       setMicroTimelines, setSelectedClipId, setCustomCuts,
       setJumpCutsEnabled, setJumpCutGapMs, setJumpCutPaddingMs, setCustomCutPaddingMs,
-      setShowSilenceGaps, setShowFillerCuts, setMuted, setMediaVolume, setOutroVolume,
+      setShowSilenceGaps, setShowFillerCuts, setShowManualCuts, setMuted, setMediaVolume, setOutroVolume,
     },
     activeProjectId,
   );
@@ -301,7 +309,7 @@ export const App: React.FC = () => {
     setAudioReactivity, setMusicInfo, setMusic, setLimiter,
     setMicroTimelines, setSelectedClipId, setPendingClipStart,
     setCustomCuts, setJumpCutsEnabled, setJumpCutGapMs, setJumpCutPaddingMs, setCustomCutPaddingMs,
-    setShowSilenceGaps, setShowFillerCuts,
+    setShowSilenceGaps, setShowFillerCuts, setShowManualCuts,
     addToast,
   };
   const handleCreateProject = createHandleCreateProject(projectRefs, projectSetters);
@@ -522,7 +530,7 @@ export const App: React.FC = () => {
       <SidebarPanel
         projects={projects} activeProjectId={activeProjectId} activeProject={activeProject} projectStatus={projectStatus}
         onSelectProject={handleSelectProject} onCreateProject={handleCreateProject}
-        videoInfo={videoInfo} audioInfo={audioInfo} audioMode={audioMode}
+        videoInfo={videoInfo} audioInfo={audioInfo} audioMode={audioMode} playheadSecond={playheadSecond}
         playing={playing} togglePlay={togglePlay} muted={muted} setMuted={setMuted}
         transcript={transcript} transcriptName={transcriptName}
         jumpCutsEnabled={jumpCutsEnabled} setJumpCutsEnabled={setJumpCutsEnabled}
@@ -535,8 +543,26 @@ export const App: React.FC = () => {
         setShowSilenceGaps={setShowSilenceGaps}
         showFillerCuts={showFillerCuts}
         setShowFillerCuts={setShowFillerCuts}
+        showManualCuts={showManualCuts}
+        setShowManualCuts={setShowManualCuts}
         onAddCustomCuts={handleAddCustomCuts}
         onClearCustomCuts={handleClearCustomCuts}
+        pendingCustomCutStartMs={pendingCustomCutStartMs}
+        onStartCustomCut={handleStartCustomCut}
+        onFinishCustomCut={handleFinishCustomCut}
+        onCancelPendingCustomCut={handleCancelPendingCustomCut}
+        selectedGap={selectedGap}
+        selectedGapDisabled={!!(selectedGapKey && jumpCutGapDisabled[selectedGapKey])}
+        selectedGapHasOverride={!!(selectedGapKey && jumpCutGapOverrides[selectedGapKey])}
+        onAdjustSelectedGap={(startMs, endMs) => {
+          if (!selectedGapKey) return;
+          const clampedStart = Math.max(0, Math.min(startMs, endMs - 20));
+          const clampedEnd = Math.max(clampedStart + 20, endMs);
+          handleAdjustGap(selectedGapKey, clampedStart, clampedEnd);
+        }}
+        onToggleSelectedGapDisabled={handleToggleGapDisabled}
+        onResetSelectedGap={handleResetGap}
+        onRemoveSelectedCustomCut={(key) => { if (isCustomKey(key)) handleRemoveCustomCut(key); }}
         bgLayerOn={bgLayerOn} setBgLayerOn={setBgLayerOn}
         bgOffMode={bgOffMode} setBgOffMode={setBgOffMode}
         bgOffColor={bgOffColor} setBgOffColor={setBgOffColor}

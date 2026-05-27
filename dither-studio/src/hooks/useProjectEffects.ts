@@ -108,6 +108,7 @@ export interface AutoSaveSettings {
   customCutPaddingMs: number;
   showSilenceGaps: boolean;
   showFillerCuts: boolean;
+  showManualCuts: boolean;
   mainTab: MainTab;
   bgSubTab: BgSubTab;
   videoSubTab: VideoSubTab;
@@ -133,7 +134,7 @@ export function useAutoSave(activeProjectId: string | null, settings: AutoSaveSe
     activeGuide, cropToGuide, bgExport, vidExport,
     microTimelines, selectedClipId,
     customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
-    showSilenceGaps, showFillerCuts,
+    showSilenceGaps, showFillerCuts, showManualCuts,
     mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, muted, mediaVolume, outroVolume,
     projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded,
   } = settings;
@@ -154,12 +155,12 @@ export function useAutoSave(activeProjectId: string | null, settings: AutoSaveSe
         layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn, music: musicLayerOn, bgOffMode, bgOffColor },
         activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
         microTimelines, selectedClipId,
-        jumpCuts: { enabled: jumpCutsEnabled, gapMs: jumpCutGapMs, paddingMs: jumpCutPaddingMs, customPaddingMs: customCutPaddingMs, showSilence: showSilenceGaps, showFiller: showFillerCuts },
+        jumpCuts: { enabled: jumpCutsEnabled, gapMs: jumpCutGapMs, paddingMs: jumpCutPaddingMs, customPaddingMs: customCutPaddingMs, showSilence: showSilenceGaps, showFiller: showFillerCuts, showManual: showManualCuts },
         customCuts,
         ui: { mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, muted, mediaVolume, outroVolume },
       }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, microTimelines, selectedClipId, customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs, showSilenceGaps, showFillerCuts, mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, muted, mediaVolume, outroVolume, projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded]);
+  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, microTimelines, selectedClipId, customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs, showSilenceGaps, showFillerCuts, showManualCuts, mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, muted, mediaVolume, outroVolume, projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded]);
 }
 
 /**
