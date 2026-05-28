@@ -5,10 +5,10 @@ import {
   listProjects, saveSettings, getTranscript, openEventStream,
   type ProjectMeta,
 } from '../lib/projectApi';
-import type { ProjectTaskStatus, MainTab, BgSubTab, VideoSubTab, VideoShaderSubTab, AudioSubTab, GuideKey, CaptionsSubTab } from '../lib/constants';
+import type { ProjectTaskStatus, MainTab, BgSubTab, VideoSubTab, VideoShaderSubTab, AudioSubTab, GuideKey, CaptionsSubTab, EditorMode, EditorSubTab } from '../lib/constants';
 import type {
   BackgroundParams, DitherParams, VideoShaderParams, ExportParams,
-  CaptionStyle, AudioReactivityParams, CaptionShaderParams, MicroTimeline,
+  CaptionStyle, AudioReactivityParams, CaptionShaderParams, MicroTimeline, MusicTimelineClip,
 } from '../lib/types';
 import type { CustomCut } from '../lib/fillerDetector';
 import type { LimiterParams } from '../lib/AudioSource';
@@ -85,6 +85,8 @@ export interface AutoSaveSettings {
   vid: VideoShaderParams;
   audioReactivity: AudioReactivityParams;
   music: MusicParams;
+  musicLibraryDurations: Record<string, number>;
+  musicTimelineClips: MusicTimelineClip[];
   limiter: LimiterParams;
   captionMode: CaptionMode;
   captionStyle: CaptionStyle;
@@ -102,6 +104,8 @@ export interface AutoSaveSettings {
   microTimelines: MicroTimeline[];
   selectedClipId: string | null;
   customCuts: CustomCut[];
+  jumpCutGapOverrides: Record<string, { startMs: number; endMs: number }>;
+  jumpCutGapDisabled: Record<string, true>;
   jumpCutsEnabled: boolean;
   jumpCutGapMs: number;
   jumpCutPaddingMs: number;
@@ -115,6 +119,10 @@ export interface AutoSaveSettings {
   videoShaderSubTab: VideoShaderSubTab;
   audioSubTab: AudioSubTab;
   captionsSubTab: CaptionsSubTab;
+  editorSubTab: EditorSubTab;
+  editorMode: EditorMode;
+  selectedFullSegmentId: string | null;
+  showAudioTracks: boolean;
   muted: boolean;
   mediaVolume: number;
   outroVolume: number;
@@ -128,14 +136,14 @@ export interface AutoSaveSettings {
 export function useAutoSave(activeProjectId: string | null, settings: AutoSaveSettings) {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
-    bg, bgDither, vid, audioReactivity, music, limiter,
+    bg, bgDither, vid, audioReactivity, music, musicLibraryDurations, musicTimelineClips, limiter,
     captionMode, captionStyle, captionShader,
     bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn,
     activeGuide, cropToGuide, bgExport, vidExport,
     microTimelines, selectedClipId,
-    customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
+    customCuts, jumpCutGapOverrides, jumpCutGapDisabled, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
     showSilenceGaps, showFillerCuts, showManualCuts,
-    mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, muted, mediaVolume, outroVolume,
+    mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, editorSubTab, editorMode, selectedFullSegmentId, showAudioTracks, muted, mediaVolume, outroVolume,
     projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded,
   } = settings;
 
@@ -150,17 +158,27 @@ export function useAutoSave(activeProjectId: string | null, settings: AutoSaveSe
     saveTimerRef.current = setTimeout(() => {
       saveSettings(activeProjectId, {
         background: bg, backgroundDither: bgDither, video: vid,
-        audioReactivity, music, limiter,
+        audioReactivity, music, musicLibraryDurations, musicTimelineClips, limiter,
         captionMode, captionStyle, captionShader,
         layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn, music: musicLayerOn, bgOffMode, bgOffColor },
         activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
         microTimelines, selectedClipId,
-        jumpCuts: { enabled: jumpCutsEnabled, gapMs: jumpCutGapMs, paddingMs: jumpCutPaddingMs, customPaddingMs: customCutPaddingMs, showSilence: showSilenceGaps, showFiller: showFillerCuts, showManual: showManualCuts },
+        jumpCuts: {
+          enabled: jumpCutsEnabled,
+          gapMs: jumpCutGapMs,
+          paddingMs: jumpCutPaddingMs,
+          customPaddingMs: customCutPaddingMs,
+          showSilence: showSilenceGaps,
+          showFiller: showFillerCuts,
+          showManual: showManualCuts,
+          overrides: jumpCutGapOverrides,
+          disabled: jumpCutGapDisabled,
+        },
         customCuts,
-        ui: { mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, muted, mediaVolume, outroVolume },
+        ui: { mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, editorSubTab, editorMode, selectedFullSegmentId, showAudioTracks, muted, mediaVolume, outroVolume },
       }).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, limiter, captionMode, captionStyle, captionShader, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, microTimelines, selectedClipId, customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs, showSilenceGaps, showFillerCuts, showManualCuts, mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, muted, mediaVolume, outroVolume, projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded]);
+  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, musicLibraryDurations, musicTimelineClips, limiter, captionMode, captionStyle, captionShader, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, microTimelines, selectedClipId, customCuts, jumpCutGapOverrides, jumpCutGapDisabled, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs, showSilenceGaps, showFillerCuts, showManualCuts, mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, editorSubTab, editorMode, selectedFullSegmentId, showAudioTracks, muted, mediaVolume, outroVolume, projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded]);
 }
 
 /**

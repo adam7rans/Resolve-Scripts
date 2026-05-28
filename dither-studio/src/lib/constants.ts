@@ -2,8 +2,10 @@ export type MainTab = 'background' | 'video' | 'captions' | 'audio' | 'editor' |
 export type BgSubTab = 'noise' | 'dither';
 export type VideoSubTab = 'shader' | 'gradient' | 'settings';
 export type VideoShaderSubTab = 'image' | 'rez' | 'distortion' | 'dither' | 'position';
-export type AudioSubTab = 'reactivity' | 'music';
+export type AudioSubTab = 'music' | 'mixer' | 'reactivity';
 export type CaptionsSubTab = 'editor' | 'type' | 'font' | 'shader';
+export type EditorSubTab = 'edits' | 'mode';
+export type EditorMode = 'clips' | 'full';
 export type FxSubTab = 'sidechain' | 'limiter';
 
 export type ProjectTaskStatus = {

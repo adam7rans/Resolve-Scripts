@@ -33,6 +33,11 @@ async function stitchVideo(projectId: string, exportId: string) {
   const keptSegments: Array<{ srcStart: number; srcEnd: number }> =
     Array.isArray(manifest.keptSegments) ? manifest.keptSegments : [];
   const hasKeptSegments = keptSegments.length > 0;
+  const manifestMusicTimelineClips = Array.isArray(manifest?.musicTimelineClips) ? manifest.musicTimelineClips : null;
+  const manifestMusic = manifest?.musicSnapshot && typeof manifest.musicSnapshot === 'object' ? manifest.musicSnapshot : null;
+  const manifestLimiter = manifest?.limiter && typeof manifest.limiter === 'object' ? manifest.limiter : null;
+  const manifestUi = manifest?.ui && typeof manifest.ui === 'object' ? manifest.ui : null;
+  const musicOutputStartTime = typeof manifest?.musicOutputStartTime === 'number' ? manifest.musicOutputStartTime : 0;
 
   const exportMode = manifest?.exportMode === 'web' ? 'web' : 'master';
   // Web mode explicitly asks the PNG export stage to preserve transparency;
@@ -60,22 +65,61 @@ async function stitchVideo(projectId: string, exportId: string) {
 
   const audioSources: { path: string; volume: number; isOutro?: boolean }[] = [];
   const pDir = projectDir(projectId);
+  const effectiveUi = manifestUi ?? settings?.ui ?? {};
+  const effectiveMusic = manifestMusic ?? settings?.music ?? {};
+  const effectiveLimiter = manifestLimiter ?? settings?.limiter;
+  const musicLibrary = Array.isArray(proj.musicFiles)
+    ? proj.musicFiles
+    : (proj.musicFile ? [{ id: 'legacy-music', filename: proj.musicFile, originalName: proj.originalMusicName || proj.musicFile }] : []);
+  const musicLibraryById = new Map(musicLibrary.map((asset) => [asset.id, asset]));
+  const musicTimelineClips = manifestMusicTimelineClips ?? (Array.isArray((settings as any)?.musicTimelineClips) ? (settings as any).musicTimelineClips : []);
 
   // Source 1: Main audio (from video or audio file)
   const mainAudioFile = proj.audioFile || proj.videoFile;
   if (mainAudioFile && fs.existsSync(path.join(pDir, mainAudioFile))) {
-    const vol = typeof settings?.ui?.mediaVolume === 'number' ? settings.ui.mediaVolume : 1;
+    const vol = typeof effectiveUi?.mediaVolume === 'number' ? effectiveUi.mediaVolume : 1;
     audioSources.push({ path: path.join(pDir, mainAudioFile), volume: vol });
   }
 
-  // Source 2: Backing music
-  if (proj.musicFile) {
-    const musicPath = path.join(pDir, proj.musicFile);
-    const exists = fs.existsSync(musicPath);
-    const musicVol = typeof settings?.music?.volume === 'number' ? settings.music.volume : 0.5;
-    const musicLayerOn = settings?.layers?.music !== false;
+  const musicVol = typeof effectiveMusic?.volume === 'number' ? effectiveMusic.volume : 0.5;
+  const musicLayerOn = manifest?.layers && typeof manifest.layers.music === 'boolean'
+    ? manifest.layers.music !== false
+    : settings?.layers?.music !== false;
+  const arrangedMusicSegments = musicLayerOn
+    ? musicTimelineClips
+        .map((clip: any, index: number) => {
+          const asset = musicLibraryById.get(String(clip.assetId || ''));
+          if (!asset) return null;
+          const assetPath = path.join(pDir, asset.filename);
+          if (!fs.existsSync(assetPath)) return null;
+          const clipStart = Number(clip.startSecond ?? 0);
+          const clipDuration = Math.max(0.01, Number(clip.durationSecond ?? 0));
+          const clipEnd = clipStart + clipDuration;
+          const visibleStart = Math.max(clipStart, musicOutputStartTime);
+          const visibleEnd = Math.min(clipEnd, musicOutputStartTime + (duration || 0));
+          if (!(visibleEnd > visibleStart)) return null;
+          const trimStart = Math.max(0, Number(clip.sourceOffsetSecond ?? 0) + (visibleStart - clipStart));
+          const visibleDuration = visibleEnd - visibleStart;
+          const fadeInSecond = visibleStart <= clipStart + 0.001 ? Math.min(Math.max(0, Number(clip.fadeInSecond ?? 0)), visibleDuration) : 0;
+          const fadeOutSecond = visibleEnd >= clipEnd - 0.001 ? Math.min(Math.max(0, Number(clip.fadeOutSecond ?? 0)), visibleDuration) : 0;
+          return {
+            id: `music_seg_${index + 1}`,
+            path: assetPath,
+            volume: musicVol,
+            trimStart,
+            visibleDuration,
+            delayMs: Math.max(0, Math.round((visibleStart - musicOutputStartTime) * 1000)),
+            fadeInSecond,
+            fadeOutSecond,
+          };
+        })
+        .filter(Boolean) as Array<{ id: string; path: string; volume: number; trimStart: number; visibleDuration: number; delayMs: number; fadeInSecond: number; fadeOutSecond: number; }>
+    : [];
 
-    if (exists && musicLayerOn) {
+  // Fallback legacy single looping backing music when there is no arranged timeline.
+  if (arrangedMusicSegments.length === 0 && musicLayerOn && proj.musicFile) {
+    const musicPath = path.join(pDir, proj.musicFile);
+    if (fs.existsSync(musicPath)) {
       audioSources.push({ path: musicPath, volume: musicVol });
     }
   }
@@ -85,12 +129,12 @@ async function stitchVideo(projectId: string, exportId: string) {
   if (outroDuration > 0) {
     const outroPath = path.resolve(SERVER_DIR, '../audio/bassnoise.wav');
     if (fs.existsSync(outroPath)) {
-      const outroVol = typeof settings?.ui?.outroVolume === 'number' ? settings.ui.outroVolume : 0.5;
+      const outroVol = typeof effectiveUi?.outroVolume === 'number' ? effectiveUi.outroVolume : 0.5;
       audioSources.push({ path: outroPath, volume: outroVol, isOutro: true });
     }
   }
 
-  if (audioSources.length > 0) {
+  if (audioSources.length > 0 || arrangedMusicSegments.length > 0) {
     audioSources.forEach((src, i) => {
       const isMusic = i > 0 && !src.isOutro;
       const isOutro = src.isOutro;
@@ -104,17 +148,23 @@ async function stitchVideo(projectId: string, exportId: string) {
       }
       ffmpegArgs.push('-i', src.path);
     });
+    arrangedMusicSegments.forEach((segment) => {
+      ffmpegArgs.push('-ss', String(segment.trimStart));
+      ffmpegArgs.push('-t', String(segment.visibleDuration));
+      ffmpegArgs.push('-i', segment.path);
+    });
 
-    const sc = settings?.music?.sidechain;
+    const sc = effectiveMusic?.sidechain;
     const scEnabled = sc?.enabled !== false;
     const threshold = sc?.threshold ?? 0.1;
     const ratio = 1.0 / (1.0 - (sc?.amount ?? 0.5));
     const attack = sc?.attackMs ?? 80;
     const release = sc?.releaseMs ?? 350;
-    const hasMusicSource = audioSources.some((src, i) => i > 0 && !src.isOutro);
-    const needsSpeechTrigger = hasMusicSource && scEnabled;
+    const hasMainSpeech = audioSources.some((src, i) => i === 0 && !src.isOutro);
+    const hasMusicSource = arrangedMusicSegments.length > 0 || audioSources.some((src, i) => i > 0 && !src.isOutro);
+    const needsSpeechTrigger = hasMainSpeech && hasMusicSource && scEnabled;
 
-    const lim = settings?.limiter;
+    const lim = effectiveLimiter;
     const limEnabled = lim?.enabled !== false;
     const limIn = limEnabled ? Math.pow(10, (lim?.inputGainDb ?? 0) / 20) : 1;
     const limThresh = limEnabled ? Math.max(0.063, Math.pow(10, (lim?.thresholdDb ?? -6) / 20)) : 1;
@@ -123,6 +173,7 @@ async function stitchVideo(projectId: string, exportId: string) {
 
     let filter = '';
 
+    const musicInputStartIndex = audioSources.length + 1;
     audioSources.forEach((src, i) => {
       const idx = i + 1;
       if (i === 0) {
@@ -173,9 +224,37 @@ async function stitchVideo(projectId: string, exportId: string) {
       }
     });
 
+    if (arrangedMusicSegments.length > 0) {
+      const segmentLabels: string[] = [];
+      arrangedMusicSegments.forEach((segment, segIndex) => {
+        const inputIndex = musicInputStartIndex + segIndex;
+        let chain = `[${inputIndex}:a]volume=${segment.volume.toFixed(2)}`;
+        if (segment.fadeInSecond > 0) {
+          chain += `,afade=t=in:st=0:d=${segment.fadeInSecond.toFixed(3)}`;
+        }
+        if (segment.fadeOutSecond > 0) {
+          const fadeOutStart = Math.max(0, segment.visibleDuration - segment.fadeOutSecond);
+          chain += `,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${segment.fadeOutSecond.toFixed(3)}`;
+        }
+        chain += `,adelay=${segment.delayMs}|${segment.delayMs}[${segment.id}];`;
+        filter += chain;
+        segmentLabels.push(`[${segment.id}]`);
+      });
+      if (segmentLabels.length === 1) {
+        filter += `${segmentLabels[0]}anull[music_pre];`;
+      } else if (segmentLabels.length > 1) {
+        filter += `${segmentLabels.join('')}amix=inputs=${segmentLabels.length}:dropout_transition=0,volume=${segmentLabels.length}[music_pre];`;
+      }
+      if (scEnabled && needsSpeechTrigger) {
+        filter += `[music_pre][speech_trigger]sidechaincompress=threshold=${threshold}:ratio=${ratio.toFixed(2)}:attack=${attack}:release=${release}[music_mix];`;
+      } else {
+        filter += `[music_pre]anull[music_mix];`;
+      }
+    }
+
     const mixLabels = [];
     if (audioSources.find(s => !s.isOutro && audioSources.indexOf(s) === 0)) mixLabels.push('[speech_mix]');
-    if (audioSources.find(s => !s.isOutro && audioSources.indexOf(s) > 0)) mixLabels.push('[music_mix]');
+    if (hasMusicSource) mixLabels.push('[music_mix]');
     if (audioSources.find(s => s.isOutro)) mixLabels.push('[outro_mix]');
 
     filter += `${mixLabels.join('')}amix=inputs=${mixLabels.length}:dropout_transition=0`;

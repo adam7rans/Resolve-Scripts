@@ -89,7 +89,8 @@ export const MusicControls: React.FC<{
   limiterReductionRef: React.MutableRefObject<number>;
   outroVolume: number;
   onOutroVolumeChange: (v: number) => void;
-}> = ({ value, onChange, hasMusic, musicName, onPickFile, onClear, duckGainRef, speechRmsRef, videoVolume, onVideoVolumeChange, videoMuted, onVideoMutedChange, limiter, onLimiterChange, limiterReductionRef, outroVolume, onOutroVolumeChange }) => {
+  showFileSection?: boolean;
+}> = ({ value, onChange, hasMusic, musicName, onPickFile, onClear, duckGainRef, speechRmsRef, videoVolume, onVideoVolumeChange, videoMuted, onVideoMutedChange, limiter, onLimiterChange, limiterReductionRef, outroVolume, onOutroVolumeChange, showFileSection = true }) => {
   const set = (patch: Partial<MusicParams>) => onChange({ ...value, ...patch });
   const setSc = (patch: Partial<MusicParams['sidechain']>) =>
     onChange({ ...value, sidechain: { ...value.sidechain, ...patch } });
@@ -107,6 +108,7 @@ export const MusicControls: React.FC<{
 
   return (
     <>
+      {showFileSection && (
       <Section title="Music File">
         <input
           ref={fileInputRef}
@@ -148,6 +150,7 @@ export const MusicControls: React.FC<{
           </button>
         )}
       </Section>
+      )}
 
       <Section title="Mixer">
         <div style={{ color: '#888', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>Video</div>

@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useUndoHistory } from './useUndoHistory';
 import type {
   BackgroundParams, DitherParams, VideoShaderParams, ExportParams,
-  CaptionStyle, AudioReactivityParams, CaptionShaderParams, MicroTimeline,
+  CaptionStyle, AudioReactivityParams, CaptionShaderParams, MicroTimeline, MusicTimelineClip,
 } from '../lib/types';
 import type { CaptionMode } from '../lib/transcript';
 import type { LimiterParams } from '../lib/AudioSource';
@@ -20,7 +20,10 @@ export type SettingsSnapshot = {
   activeGuide: GuideKey | null; cropToGuide: boolean;
   bgExport: ExportParams; vidExport: ExportParams;
   microTimelines: MicroTimeline[]; selectedClipId: string | null;
+  musicTimelineClips: MusicTimelineClip[]; selectedMusicClipId: string | null; showAudioTracks: boolean;
   customCuts: CustomCut[];
+  jumpCutGapOverrides: Record<string, { startMs: number; endMs: number }>;
+  jumpCutGapDisabled: Record<string, true>;
   jumpCutsEnabled: boolean; jumpCutGapMs: number;
   jumpCutPaddingMs: number; customCutPaddingMs: number;
   showSilenceGaps: boolean; showFillerCuts: boolean; showManualCuts: boolean;
@@ -51,7 +54,12 @@ export interface UndoSetters {
   setVidExport: React.Dispatch<React.SetStateAction<ExportParams>>;
   setMicroTimelines: React.Dispatch<React.SetStateAction<MicroTimeline[]>>;
   setSelectedClipId: React.Dispatch<React.SetStateAction<string | null>>;
+  setMusicTimelineClips: React.Dispatch<React.SetStateAction<MusicTimelineClip[]>>;
+  setSelectedMusicClipId: React.Dispatch<React.SetStateAction<string | null>>;
+  setShowAudioTracks: React.Dispatch<React.SetStateAction<boolean>>;
   setCustomCuts: React.Dispatch<React.SetStateAction<CustomCut[]>>;
+  setJumpCutGapOverrides: React.Dispatch<React.SetStateAction<Record<string, { startMs: number; endMs: number }>>>;
+  setJumpCutGapDisabled: React.Dispatch<React.SetStateAction<Record<string, true>>>;
   setJumpCutsEnabled: React.Dispatch<React.SetStateAction<boolean>>;
   setJumpCutGapMs: React.Dispatch<React.SetStateAction<number>>;
   setJumpCutPaddingMs: React.Dispatch<React.SetStateAction<number>>;
@@ -91,7 +99,9 @@ export function useAppUndoRedo(
     s.setActiveGuide(snap.activeGuide); s.setCropToGuide(snap.cropToGuide);
     s.setBgExport(snap.bgExport); s.setVidExport(snap.vidExport);
     s.setMicroTimelines(snap.microTimelines); s.setSelectedClipId(snap.selectedClipId);
+    s.setMusicTimelineClips(snap.musicTimelineClips); s.setSelectedMusicClipId(snap.selectedMusicClipId); s.setShowAudioTracks(snap.showAudioTracks);
     s.setCustomCuts(snap.customCuts);
+    s.setJumpCutGapOverrides(snap.jumpCutGapOverrides); s.setJumpCutGapDisabled(snap.jumpCutGapDisabled);
     s.setJumpCutsEnabled(snap.jumpCutsEnabled); s.setJumpCutGapMs(snap.jumpCutGapMs);
     s.setJumpCutPaddingMs(snap.jumpCutPaddingMs); s.setCustomCutPaddingMs(snap.customCutPaddingMs);
     s.setShowSilenceGaps(snap.showSilenceGaps); s.setShowFillerCuts(snap.showFillerCuts); s.setShowManualCuts(snap.showManualCuts);
@@ -109,7 +119,8 @@ export function useAppUndoRedo(
     captionMode, captionStyle, captionShader,
     bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn,
     activeGuide, cropToGuide, bgExport, vidExport,
-    microTimelines, selectedClipId, customCuts,
+    microTimelines, selectedClipId, musicTimelineClips, selectedMusicClipId, showAudioTracks, customCuts,
+    jumpCutGapOverrides, jumpCutGapDisabled,
     jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
     showSilenceGaps, showFillerCuts, showManualCuts, muted, mediaVolume, outroVolume,
   } = state;
@@ -121,7 +132,8 @@ export function useAppUndoRedo(
     captionMode, captionStyle, captionShader,
     bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn,
     activeGuide, cropToGuide, bgExport, vidExport,
-    microTimelines, selectedClipId, customCuts,
+    microTimelines, selectedClipId, musicTimelineClips, selectedMusicClipId, showAudioTracks, customCuts,
+    jumpCutGapOverrides, jumpCutGapDisabled,
     jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
     showSilenceGaps, showFillerCuts, showManualCuts, muted, mediaVolume, outroVolume,
   ]);

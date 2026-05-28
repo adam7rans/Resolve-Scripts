@@ -468,6 +468,24 @@ export interface MicroTimeline {
   color: string;
 }
 
+export interface MusicAsset {
+  id: string;
+  filename: string;
+  originalName: string;
+}
+
+export interface MusicTimelineClip {
+  id: string;
+  assetId: string;
+  trackIndex: 0 | 1;
+  startSecond: number;
+  durationSecond: number;
+  sourceOffsetSecond: number;
+  fadeInSecond: number;
+  fadeOutSecond: number;
+  color: string;
+}
+
 export const MICRO_TIMELINE_COLORS = [
   '#1f6feb', '#30d158', '#eb6f1f', '#ff453a',
   '#bf5af2', '#ffd60a', '#64d2ff',

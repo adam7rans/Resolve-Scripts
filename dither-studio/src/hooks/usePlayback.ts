@@ -16,6 +16,7 @@ export interface PlaybackRefs {
 export interface PlaybackState {
   music: MusicParams;
   musicLayerOn: boolean;
+  hasTimelineMusic?: boolean;
   videoInfo: { name: string; duration: number; w: number; h: number } | null;
   audioInfo: { name: string; duration: number } | null;
   selectedClip: MicroTimeline | null;
@@ -31,7 +32,7 @@ export interface PlaybackSetters {
 export function createTogglePlay(refs: PlaybackRefs, state: PlaybackState, setters: PlaybackSetters) {
   return () => {
     const { mediaElRef, audioSourceRef, musicElRef, musicPlayerRef, playingInClipRef } = refs;
-    const { music, musicLayerOn, videoInfo, audioInfo, selectedClip } = state;
+    const { music, musicLayerOn, hasTimelineMusic, videoInfo, audioInfo, selectedClip } = state;
     const { setPlaying, setPlayheadSecond, setPlaybackStartMs } = setters;
 
     const v = mediaElRef.current;
@@ -77,7 +78,7 @@ export function createTogglePlay(refs: PlaybackRefs, state: PlaybackState, sette
         const p = v.play();
         if (p && typeof p.catch === 'function') p.catch(() => setPlaying(false));
         const mEl = musicElRef.current;
-        if (mEl && musicLayerOn) {
+        if (mEl && musicLayerOn && !hasTimelineMusic) {
           if (mEl.duration > 0) {
             mEl.currentTime = (target - clipStart) % mEl.duration;
           }

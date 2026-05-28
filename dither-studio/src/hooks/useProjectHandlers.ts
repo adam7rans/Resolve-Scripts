@@ -6,12 +6,12 @@ import {
   DEFAULT_CAPTION_STYLE, DEFAULT_AUDIO_REACTIVITY, DEFAULT_CAPTION_SHADER,
   normalizeVideoShaderParams,
   type BackgroundParams, type DitherParams, type VideoShaderParams, type ExportParams, type CaptionStyle,
-  type AudioReactivityParams, type CaptionShaderParams, type MicroTimeline,
+  type AudioReactivityParams, type CaptionShaderParams, type MicroTimeline, type MusicAsset, type MusicTimelineClip,
 } from '../lib/types';
 import { DEFAULT_LIMITER, type LimiterParams } from '../lib/AudioSource';
 import type { MusicParams } from '../lib/MusicPlayer';
 import { parseTranscript, type CaptionMode, type TranscriptData, type ClipCaptionEdits } from '../lib/transcript';
-import type { ProjectTaskStatus, MainTab, BgSubTab, VideoSubTab, VideoShaderSubTab, AudioSubTab, GuideKey, CaptionsSubTab } from '../lib/constants';
+import type { ProjectTaskStatus, MainTab, BgSubTab, VideoSubTab, VideoShaderSubTab, AudioSubTab, GuideKey, CaptionsSubTab, EditorMode, EditorSubTab } from '../lib/constants';
 import { snapToExportResolution } from '../lib/layoutUtils';
 import type { VideoRenderer } from '../lib/VideoRenderer';
 import {
@@ -41,6 +41,8 @@ export interface ProjectHandlerSetters {
   setVideoShaderSubTab: React.Dispatch<React.SetStateAction<VideoShaderSubTab>>;
   setAudioSubTab: React.Dispatch<React.SetStateAction<AudioSubTab>>;
   setCaptionsSubTab: React.Dispatch<React.SetStateAction<CaptionsSubTab>>;
+  setEditorSubTab: React.Dispatch<React.SetStateAction<EditorSubTab>>;
+  setEditorMode: React.Dispatch<React.SetStateAction<EditorMode>>;
   setBg: React.Dispatch<React.SetStateAction<BackgroundParams>>;
   setBgDither: React.Dispatch<React.SetStateAction<DitherParams>>;
   setVid: React.Dispatch<React.SetStateAction<VideoShaderParams>>;
@@ -70,11 +72,20 @@ export interface ProjectHandlerSetters {
   setAudioReactivity: React.Dispatch<React.SetStateAction<AudioReactivityParams>>;
   setMusicInfo: React.Dispatch<React.SetStateAction<{ name: string } | null>>;
   setMusic: React.Dispatch<React.SetStateAction<MusicParams>>;
+  setMusicLibrary: React.Dispatch<React.SetStateAction<MusicAsset[]>>;
+  setMusicAssetDurations: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  setSelectedMusicAssetIds: React.Dispatch<React.SetStateAction<string[]>>;
+  setMusicTimelineClips: React.Dispatch<React.SetStateAction<MusicTimelineClip[]>>;
+  setSelectedMusicClipId: React.Dispatch<React.SetStateAction<string | null>>;
   setLimiter: React.Dispatch<React.SetStateAction<LimiterParams>>;
   setMicroTimelines: React.Dispatch<React.SetStateAction<MicroTimeline[]>>;
   setSelectedClipId: React.Dispatch<React.SetStateAction<string | null>>;
+  setSelectedFullSegmentId: React.Dispatch<React.SetStateAction<string | null>>;
   setPendingClipStart: React.Dispatch<React.SetStateAction<number | null>>;
   setCustomCuts: React.Dispatch<React.SetStateAction<import('../lib/fillerDetector').CustomCut[]>>;
+  setJumpCutGapOverrides: React.Dispatch<React.SetStateAction<Record<string, { startMs: number; endMs: number }>>>;
+  setJumpCutGapDisabled: React.Dispatch<React.SetStateAction<Record<string, true>>>;
+  setSelectedGapKey: React.Dispatch<React.SetStateAction<string | null>>;
   setJumpCutsEnabled: React.Dispatch<React.SetStateAction<boolean>>;
   setJumpCutGapMs: React.Dispatch<React.SetStateAction<number>>;
   setJumpCutPaddingMs: React.Dispatch<React.SetStateAction<number>>;
@@ -82,6 +93,7 @@ export interface ProjectHandlerSetters {
   setShowSilenceGaps: React.Dispatch<React.SetStateAction<boolean>>;
   setShowFillerCuts: React.Dispatch<React.SetStateAction<boolean>>;
   setShowManualCuts: React.Dispatch<React.SetStateAction<boolean>>;
+  setShowAudioTracks: React.Dispatch<React.SetStateAction<boolean>>;
   addToast: (message: string, type?: Toast['type'], sticky?: boolean) => number;
 }
 
@@ -99,6 +111,8 @@ export function createHandleCreateProject(refs: ProjectHandlerRefs, setters: Pro
       s.setVideoSubTab('shader');
       s.setVideoShaderSubTab('image');
       s.setCaptionsSubTab('editor');
+      s.setEditorSubTab('edits');
+      s.setEditorMode('clips');
       s.setBg(DEFAULT_BACKGROUND);
       s.setBgDither(DEFAULT_DITHER);
       s.setVid(DEFAULT_VIDEO);
@@ -135,8 +149,21 @@ export function createHandleCreateProject(refs: ProjectHandlerRefs, setters: Pro
       musicElRef.current = null;
       s.setMusicInfo(null);
       s.setMusic(DEFAULT_MUSIC_PARAMS);
+      s.setMusicLibrary([]);
+      s.setMusicAssetDurations({});
+      s.setSelectedMusicAssetIds([]);
+      s.setMusicTimelineClips([]);
+      s.setSelectedMusicClipId(null);
       s.setLimiter(DEFAULT_LIMITER);
       s.setMusicLayerOn(true);
+      s.setShowAudioTracks(true);
+      s.setMicroTimelines([]);
+      s.setSelectedClipId(null);
+      s.setSelectedFullSegmentId(null);
+      s.setPendingClipStart(null);
+      s.setJumpCutGapOverrides({});
+      s.setJumpCutGapDisabled({});
+      s.setSelectedGapKey(null);
       s.setProjectStatus({ kind: 'success', message: `Project "${p.name}" created`, detail: `Folder: projects/${p.id}` });
       s.addToast(`Project "${p.name}" created`, 'success');
     } catch { s.addToast('Failed to create project', 'error'); }
@@ -163,6 +190,14 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
       musicPlayerRef.current = null;
       musicElRef.current = null;
       s.setMusicInfo(null);
+      s.setMusicLibrary(Array.isArray((proj as any).musicFiles) ? (proj as any).musicFiles : (
+        proj.musicFile ? [{ id: 'legacy-music', filename: proj.musicFile, originalName: proj.originalMusicName || proj.musicFile }] : []
+      ));
+      s.setMusicAssetDurations(proj.musicLibraryDurations && typeof proj.musicLibraryDurations === 'object' ? proj.musicLibraryDurations : {});
+      s.setSelectedMusicAssetIds([]);
+      s.setMusicTimelineClips(Array.isArray((proj as any).musicTimelineClips) ? (proj as any).musicTimelineClips : []);
+      s.setSelectedMusicClipId(null);
+      s.setSelectedGapKey(null);
       s.setVideoInfo(null);
       s.setAudioInfo(null);
       s.setPlayheadSecond(0);
@@ -221,13 +256,27 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
               : proj.ui.videoShaderSubTab,
           );
         }
-        if (proj.ui.audioSubTab) s.setAudioSubTab(proj.ui.audioSubTab);
+        if (proj.ui.audioSubTab) s.setAudioSubTab(proj.ui.audioSubTab === 'music' ? 'mixer' : proj.ui.audioSubTab);
         if (proj.ui.captionsSubTab) {
           s.setCaptionsSubTab(proj.ui.captionsSubTab === 'captions' ? 'editor' : proj.ui.captionsSubTab);
         }
+        if (proj.ui.editorSubTab) s.setEditorSubTab(proj.ui.editorSubTab);
+        else s.setEditorSubTab('edits');
+        if (proj.ui.editorMode) s.setEditorMode(proj.ui.editorMode);
+        else s.setEditorMode('clips');
+        if (typeof proj.ui.selectedFullSegmentId === 'string' || proj.ui.selectedFullSegmentId === null) {
+          s.setSelectedFullSegmentId(proj.ui.selectedFullSegmentId);
+        } else s.setSelectedFullSegmentId(null);
+        if (typeof proj.ui.showAudioTracks === 'boolean') s.setShowAudioTracks(proj.ui.showAudioTracks);
+        else s.setShowAudioTracks(true);
         if (typeof proj.ui.muted === 'boolean') s.setMuted(proj.ui.muted);
         if (typeof proj.ui.mediaVolume === 'number') s.setMediaVolume(proj.ui.mediaVolume);
         if (typeof proj.ui.outroVolume === 'number') s.setOutroVolume(proj.ui.outroVolume);
+      } else {
+        s.setEditorSubTab('edits');
+        s.setEditorMode('clips');
+        s.setSelectedFullSegmentId(null);
+        s.setShowAudioTracks(true);
       }
       if (proj.layers) {
         s.setBgLayerOn(proj.layers.background ?? true);
@@ -256,10 +305,15 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
         s.setMicroTimelines([]);
         s.setSelectedClipId(null);
       }
+      if (!proj.ui || (!('selectedFullSegmentId' in proj.ui))) {
+        s.setSelectedFullSegmentId(null);
+      }
       s.setPendingClipStart(null);
 
       // custom skip ranges (filler/editorial cuts) + jump-cut prefs
       s.setCustomCuts(Array.isArray(proj.customCuts) ? proj.customCuts : []);
+      s.setJumpCutGapOverrides({});
+      s.setJumpCutGapDisabled({});
       s.setShowSilenceGaps(false);
       s.setShowFillerCuts(false);
       s.setShowManualCuts(false);
@@ -272,6 +326,8 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
         if (typeof proj.jumpCuts.showFiller === 'boolean') s.setShowFillerCuts(proj.jumpCuts.showFiller);
         if (typeof proj.jumpCuts.showManual === 'boolean') s.setShowManualCuts(proj.jumpCuts.showManual);
         else if (proj.jumpCuts.enabled && Array.isArray(proj.customCuts) && proj.customCuts.some((cut: any) => String(cut.key || '').startsWith('editorial:') || String(cut.key || '').startsWith('custom:'))) s.setShowManualCuts(true);
+        if (proj.jumpCuts.overrides && typeof proj.jumpCuts.overrides === 'object') s.setJumpCutGapOverrides(proj.jumpCuts.overrides);
+        if (proj.jumpCuts.disabled && typeof proj.jumpCuts.disabled === 'object') s.setJumpCutGapDisabled(proj.jumpCuts.disabled);
       } else {
         s.setJumpCutsEnabled(false);
       }
@@ -326,8 +382,8 @@ export function createHandleSelectProject(refs: ProjectHandlerRefs, setters: Pro
           a.currentTime = 0;
         });
       }
-      // load music if present
-      if (proj.hasMusic) {
+      // load legacy single music file if present and there is no library yet
+      if (proj.hasMusic && !(Array.isArray((proj as any).musicFiles) && (proj as any).musicFiles.length > 0)) {
         const url = getMusicUrl(id);
         const m = document.createElement('audio');
         m.src = url;

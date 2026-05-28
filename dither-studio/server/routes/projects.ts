@@ -54,7 +54,9 @@ projectRoutes.get('/:id', (req, res) => {
     mediaType: proj.mediaType || (proj.audioFile ? 'audio' : proj.videoFile ? 'video' : null),
     hasVideo: !!(proj.videoFile && fs.existsSync(`${pDir}/${proj.videoFile}`)),
     hasAudio: !!(proj.audioFile && fs.existsSync(`${pDir}/${proj.audioFile}`)),
-    hasMusic: !!(proj.musicFile && fs.existsSync(`${pDir}/${proj.musicFile}`)),
+    hasMusic:
+      (Array.isArray(proj.musicFiles) && proj.musicFiles.some((asset) => fs.existsSync(`${pDir}/${asset.filename}`))) ||
+      !!(proj.musicFile && fs.existsSync(`${pDir}/${proj.musicFile}`)),
     hasTranscript: hasCaption(id, proj),
   });
 });

@@ -76,7 +76,7 @@ export function writeProject(id: string, data: Project) {
 const SETTINGS_KEYS = new Set([
   'background', 'backgroundDither', 'video', 'captionMode', 'captionStyle', 'layers',
   'guides', 'activeGuide', 'cropToGuide', 'exportBackground', 'exportVideo', 'ui',
-  'audioReactivity', 'mathFigure', 'exportAudio', 'music',
+  'audioReactivity', 'mathFigure', 'exportAudio', 'music', 'musicLibraryDurations', 'musicTimelineClips',
 ]);
 
 export function readSettings(id: string, project?: Project | null): Settings {
@@ -123,6 +123,7 @@ export function projectMeta(id: string) {
   const proj = readProject(id);
   if (!proj) return null;
   const pDir = projectDir(id);
+  const hasMusicLibrary = Array.isArray(proj.musicFiles) && proj.musicFiles.some((asset) => fs.existsSync(path.join(pDir, asset.filename)));
   return {
     id,
     name: proj.name || id,
@@ -131,7 +132,7 @@ export function projectMeta(id: string) {
     mediaType: proj.mediaType || (proj.audioFile ? 'audio' : proj.videoFile ? 'video' : null),
     hasVideo: !!(proj.videoFile && fs.existsSync(path.join(pDir, proj.videoFile))),
     hasAudio: !!(proj.audioFile && fs.existsSync(path.join(pDir, proj.audioFile))),
-    hasMusic: !!(proj.musicFile && fs.existsSync(path.join(pDir, proj.musicFile))),
+    hasMusic: hasMusicLibrary || !!(proj.musicFile && fs.existsSync(path.join(pDir, proj.musicFile))),
     hasTranscript: hasCaption(id, proj),
   };
 }

@@ -8,6 +8,7 @@ interface Props {
   microTimelines: MicroTimeline[];
   selectedId: string | null;
   selectedClip: MicroTimeline | null;
+  editHandlesEnabled: boolean;
   outroEnabled: boolean | undefined;
   pendingClipStart: number | null;
   secToPct: (t: number) => number;
@@ -19,7 +20,7 @@ interface Props {
 }
 
 export const ClipTrackOverlay: React.FC<Props> = ({
-  microTimelines, selectedId, selectedClip, outroEnabled, pendingClipStart,
+  microTimelines, selectedId, selectedClip, editHandlesEnabled, outroEnabled, pendingClipStart,
   secToPct, timeAtClientX, onSelectClip, onPlayheadChange, setDragKind, startDrag,
 }) => {
   const [hoverHandle, setHoverHandle] = useState<{ id: string; side: 'start' | 'end' } | null>(null);
@@ -58,7 +59,7 @@ export const ClipTrackOverlay: React.FC<Props> = ({
             />
 
             {/* start handle */}
-            {l >= 0 && l <= 100 && (
+            {editHandlesEnabled && l >= 0 && l <= 100 && (
               <div
                 onPointerEnter={() => setHoverHandle({ id: mt.id, side: 'start' })}
                 onPointerLeave={() => setHoverHandle(null)}
@@ -89,7 +90,7 @@ export const ClipTrackOverlay: React.FC<Props> = ({
             )}
 
             {/* end handle */}
-            {r >= 0 && r <= 100 && (
+            {editHandlesEnabled && r >= 0 && r <= 100 && (
               <div
                 onPointerEnter={() => setHoverHandle({ id: mt.id, side: 'end' })}
                 onPointerLeave={() => setHoverHandle(null)}
@@ -145,7 +146,7 @@ export const ClipTrackOverlay: React.FC<Props> = ({
       })()}
 
       {/* pending clip start marker */}
-      {pendingClipStart !== null && (() => {
+      {editHandlesEnabled && pendingClipStart !== null && (() => {
         const pVis = secToPct(pendingClipStart);
         if (pVis < 0 || pVis > 100) return null;
         return (

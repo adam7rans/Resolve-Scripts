@@ -6,20 +6,26 @@ import { MusicPlayer, DEFAULT_MUSIC_PARAMS, type MusicParams } from '../lib/Musi
 import {
   DEFAULT_BACKGROUND, DEFAULT_DITHER, DEFAULT_VIDEO, DEFAULT_EXPORT, normalizeVideoShaderParams,
   DEFAULT_CAPTION_STYLE, DEFAULT_AUDIO_REACTIVITY, DEFAULT_CAPTION_SHADER,
+  MICRO_TIMELINE_COLORS,
   type BackgroundParams, type DitherParams, type VideoShaderParams, type ExportParams, type CaptionStyle,
-  type AudioReactivityParams, type CaptionShaderParams, type MicroTimeline,
+  type AudioReactivityParams, type CaptionShaderParams, type MicroTimeline, type MusicAsset, type MusicTimelineClip,
 } from '../lib/types';
 import { PreviewTimeline } from './timeline/PreviewTimeline';
 import { applyClipCaptionEdits, type CaptionMode, type TranscriptData, type ClipCaptionEdits } from '../lib/transcript';
 import {
+  listProjects,
   type ProjectMeta,
+  deleteMusicAsset,
+  getMusicAssetUrl,
+  uploadMusicFiles,
 } from '../lib/projectApi';
 import {
-  type MainTab, type BgSubTab, type VideoSubTab, type VideoShaderSubTab, type AudioSubTab, type CaptionsSubTab,
+  type MainTab, type BgSubTab, type VideoSubTab, type VideoShaderSubTab, type AudioSubTab, type CaptionsSubTab, type EditorSubTab, type EditorMode,
   type ProjectTaskStatus, type GuideKey,
   GUIDES,
 } from '../lib/constants';
 import { isVerticalVideo, fitRect, resolveExportRange } from '../lib/layoutUtils';
+import { mergeTimeGaps, outputToSourceTime, sourceToOutputTime } from '../lib/timeMapping';
 import { useToasts } from '../hooks/useToasts';
 import { useJumpCuts } from '../hooks/useJumpCuts';
 import { createExportComposition } from '../hooks/useExporter';
@@ -37,6 +43,49 @@ import { SidebarPanel } from './panels/SidebarPanel';
 import { PreviewArea } from './PreviewArea';
 import { isCustomKey } from '../hooks/useJumpCuts';
 
+const FULL_EXPORT_CHUNK_SECONDS = 300;
+const MUSIC_TRACK_COUNT = 2;
+const MUSIC_DEFAULT_OVERLAP_SECONDS = 10;
+
+function sanitizeExportPrefix(name: string, fallback: string) {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || fallback;
+}
+
+function clampMusicFade(value: number, duration: number) {
+  return Math.max(0, Math.min(value, Math.max(0, duration - 0.01)));
+}
+
+function musicClipEnd(clip: MusicTimelineClip) {
+  return clip.startSecond + clip.durationSecond;
+}
+
+function musicFadeGainAtTime(clip: MusicTimelineClip, t: number) {
+  if (t < clip.startSecond || t > musicClipEnd(clip)) return 0;
+  const local = t - clip.startSecond;
+  const remaining = musicClipEnd(clip) - t;
+  const fadeIn = clip.fadeInSecond > 0 ? Math.min(1, local / clip.fadeInSecond) : 1;
+  const fadeOut = clip.fadeOutSecond > 0 ? Math.min(1, remaining / clip.fadeOutSecond) : 1;
+  return Math.max(0, Math.min(1, fadeIn, fadeOut));
+}
+
+async function readLocalAudioDuration(file: File): Promise<number> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const audio = document.createElement('audio');
+    audio.preload = 'metadata';
+    audio.src = url;
+    audio.addEventListener('loadedmetadata', () => {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      URL.revokeObjectURL(url);
+      resolve(duration);
+    }, { once: true });
+    audio.addEventListener('error', () => {
+      URL.revokeObjectURL(url);
+      resolve(0);
+    }, { once: true });
+  });
+}
+
 export const App: React.FC = () => {
   // ---------- shared state ----------
   const [mainTab, setMainTab] = useState<MainTab>('background');
@@ -45,6 +94,8 @@ export const App: React.FC = () => {
   const [videoShaderSubTab, setVideoShaderSubTab] = useState<VideoShaderSubTab>('image');
   const [audioSubTab, setAudioSubTab] = useState<AudioSubTab>('music');
   const [captionsSubTab, setCaptionsSubTab] = useState<CaptionsSubTab>('editor');
+  const [editorSubTab, setEditorSubTab] = useState<EditorSubTab>('edits');
+  const [editorMode, setEditorMode] = useState<EditorMode>('clips');
   const [outroVolume, setOutroVolume] = useState(0.5);
   const [outroAudio] = useState(() => {
     const a = new Audio('audio/bassnoise.wav');
@@ -73,6 +124,12 @@ export const App: React.FC = () => {
   const [music, setMusic] = useState<MusicParams>(DEFAULT_MUSIC_PARAMS);
   const [musicLayerOn, setMusicLayerOn] = useState(true);
   const [musicInfo, setMusicInfo] = useState<{ name: string } | null>(null);
+  const [musicLibrary, setMusicLibrary] = useState<MusicAsset[]>([]);
+  const [musicAssetDurations, setMusicAssetDurations] = useState<Record<string, number>>({});
+  const [selectedMusicAssetIds, setSelectedMusicAssetIds] = useState<string[]>([]);
+  const [musicTimelineClips, setMusicTimelineClips] = useState<MusicTimelineClip[]>([]);
+  const [selectedMusicClipId, setSelectedMusicClipId] = useState<string | null>(null);
+  const [showAudioTracks, setShowAudioTracks] = useState(true);
 
   // transcript / captions
   const [transcript, setTranscript] = useState<TranscriptData | null>(null);
@@ -93,8 +150,11 @@ export const App: React.FC = () => {
     showFillerCuts, setShowFillerCuts,
     showManualCuts, setShowManualCuts,
     jumpCutGapOverrides,
+    setJumpCutGapOverrides,
     jumpCutGapDisabled,
+    setJumpCutGapDisabled,
     selectedGapKey,
+    setSelectedGapKey,
     jumpCutGaps,
     jumpCutGapsEffective,
     jumpCutsEnabledRef,
@@ -135,6 +195,7 @@ export const App: React.FC = () => {
   const [playbackStartMs, setPlaybackStartMs] = useState<number | undefined>(undefined);
   const [microTimelines, setMicroTimelines] = useState<MicroTimeline[]>([]);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [selectedFullSegmentId, setSelectedFullSegmentId] = useState<string | null>(null);
   const [pendingClipStart, setPendingClipStart] = useState<number | null>(null);
   const [muted, setMuted] = useState(false);
   // Volume for the main video/audio element (the "video" track in the Mixer).
@@ -153,29 +214,192 @@ export const App: React.FC = () => {
   // Derived state
   const baseExportParams = videoInfo ? vidExport : bgExport;
   const setBaseExportParams = videoInfo ? setVidExport : setBgExport;
-  const selectedClip = microTimelines.find(mt => mt.id === selectedClipId) ?? null;
+  const selectedProjectClip = microTimelines.find(mt => mt.id === selectedClipId) ?? null;
+  const mediaDuration = videoInfo?.duration ?? audioInfo?.duration ?? baseExportParams.duration ?? 10;
+  const fullExportChunks = useMemo<MicroTimeline[]>(() => {
+    if (!Number.isFinite(mediaDuration) || mediaDuration <= 0) return [];
+    const chunks: MicroTimeline[] = [];
+    let start = 0;
+    let index = 0;
+    while (start < mediaDuration - 0.001) {
+      const end = Math.min(mediaDuration, start + FULL_EXPORT_CHUNK_SECONDS);
+      chunks.push({
+        id: `full-chunk-${index + 1}`,
+        name: `Full ${index + 1}`,
+        startSecond: start,
+        endSecond: end,
+        color: MICRO_TIMELINE_COLORS[index % MICRO_TIMELINE_COLORS.length],
+      });
+      start = end;
+      index += 1;
+    }
+    return chunks;
+  }, [mediaDuration]);
+  const selectedFullSegment = fullExportChunks.find((chunk) => chunk.id === selectedFullSegmentId) ?? null;
+  const timelineSegments = editorMode === 'clips' ? microTimelines : fullExportChunks;
+  const selectedTimelineSegment = editorMode === 'clips' ? selectedProjectClip : selectedFullSegment;
+  const selectedMusicClip = musicTimelineClips.find((clip) => clip.id === selectedMusicClipId) ?? null;
+  const musicClipLabels = useMemo(
+    () =>
+      Object.fromEntries(
+        musicTimelineClips.map((clip) => [clip.id, musicLibrary.find((asset) => asset.id === clip.assetId)?.originalName ?? `Track ${clip.trackIndex + 1}`]),
+      ),
+    [musicLibrary, musicTimelineClips],
+  );
+  const activeSkipTimeGaps = useMemo(
+    () => mergeTimeGaps(
+      jumpCutsEnabled
+        ? jumpCutGapsEffective
+            .filter((gap) => !jumpCutGapDisabled[gap.key])
+            .map((gap) => ({ start: gap.startMs / 1000, end: gap.endMs / 1000 }))
+        : [],
+    ),
+    [jumpCutsEnabled, jumpCutGapDisabled, jumpCutGapsEffective],
+  );
   const selectedGap = jumpCutGaps.find((gap) => gap.key === selectedGapKey) ?? null;
   const effectiveTranscript = useMemo(
-    () => (transcript && selectedClip ? applyClipCaptionEdits(transcript, captionClipEdits[selectedClip.id]) : transcript),
-    [transcript, selectedClip, captionClipEdits],
+    () => (transcript && editorMode === 'clips' && selectedProjectClip ? applyClipCaptionEdits(transcript, captionClipEdits[selectedProjectClip.id]) : transcript),
+    [transcript, editorMode, selectedProjectClip, captionClipEdits],
   );
-  const activeExportParams = selectedClip
-    ? {
+  const activeExportParams = useMemo(() => {
+    if (selectedTimelineSegment) {
+      const isLastFullChunk =
+        editorMode === 'full' &&
+        selectedTimelineSegment.id === fullExportChunks[fullExportChunks.length - 1]?.id;
+      return {
         ...baseExportParams,
-        startSecond: selectedClip.startSecond,
-        endSecond: selectedClip.endSecond,
-        filenamePrefix: selectedClip.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || baseExportParams.filenamePrefix,
-      }
-    : baseExportParams;
+        startSecond: selectedTimelineSegment.startSecond,
+        endSecond: selectedTimelineSegment.endSecond,
+        duration: Math.max(0.01, selectedTimelineSegment.endSecond - selectedTimelineSegment.startSecond),
+        outroEnabled: editorMode === 'full' ? (isLastFullChunk ? baseExportParams.outroEnabled : false) : baseExportParams.outroEnabled,
+        filenamePrefix: sanitizeExportPrefix(selectedTimelineSegment.name, baseExportParams.filenamePrefix),
+      };
+    }
+    if (editorMode === 'full') {
+      return {
+        ...baseExportParams,
+        startSecond: 0,
+        endSecond: mediaDuration,
+        duration: Math.max(0.01, mediaDuration),
+        filenamePrefix: sanitizeExportPrefix(`${baseExportParams.filenamePrefix}-full`, baseExportParams.filenamePrefix),
+      };
+    }
+    return baseExportParams;
+  }, [selectedTimelineSegment, editorMode, fullExportChunks, baseExportParams, mediaDuration]);
   const setActiveExportParams = setBaseExportParams;
-  const mediaDuration = videoInfo?.duration ?? audioInfo?.duration ?? activeExportParams.duration ?? 10;
   const timelineDuration = mediaDuration + (activeExportParams.outroEnabled ? 5 : 0);
+  const musicTimelineDuration = useMemo(
+    () => sourceToOutputTime(mediaDuration, activeSkipTimeGaps) + (activeExportParams.outroEnabled ? 5 : 0),
+    [mediaDuration, activeExportParams.outroEnabled, activeSkipTimeGaps],
+  );
+  const musicPlayheadSecond = useMemo(
+    () => sourceToOutputTime(playheadSecond, activeSkipTimeGaps),
+    [playheadSecond, activeSkipTimeGaps],
+  );
   const timelineRange = resolveExportRange(activeExportParams, mediaDuration);
   const verticalVideo = isVerticalVideo(videoInfo);
   const availableGuides = verticalVideo ? GUIDES.filter((g) => g.key !== '1920x1080') : GUIDES;
   const previewFrame = videoInfo
     ? fitRect(previewSize.w, previewSize.h, videoInfo.w, videoInfo.h)
     : { x: 0, y: 0, w: previewSize.w, h: previewSize.h };
+
+  const previousEditorModeRef = useRef<EditorMode>(editorMode);
+  useEffect(() => {
+    const prevMode = previousEditorModeRef.current;
+    previousEditorModeRef.current = editorMode;
+    if (editorMode !== 'full') return;
+    if (fullExportChunks.length === 0) {
+      if (selectedFullSegmentId !== null) setSelectedFullSegmentId(null);
+      return;
+    }
+    if (selectedFullSegmentId && fullExportChunks.some((chunk) => chunk.id === selectedFullSegmentId)) return;
+    if (prevMode !== 'full') {
+      setSelectedFullSegmentId(fullExportChunks[0].id);
+    }
+  }, [editorMode, fullExportChunks, selectedFullSegmentId]);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const pending = musicLibrary.filter((asset) => musicAssetDurations[asset.id] === undefined);
+    if (pending.length === 0) return;
+    let cancelled = false;
+    pending.forEach((asset) => {
+      const audio = document.createElement('audio');
+      audio.preload = 'metadata';
+      audio.src = getMusicAssetUrl(activeProjectId, asset.id);
+      audio.addEventListener('loadedmetadata', () => {
+        if (cancelled) return;
+        const duration = audio.duration;
+        if (Number.isFinite(duration) && duration > 0) {
+          setMusicAssetDurations((prev) => (prev[asset.id] === undefined ? { ...prev, [asset.id]: duration } : prev));
+        }
+      }, { once: true });
+    });
+    return () => { cancelled = true; };
+  }, [activeProjectId, musicLibrary, musicAssetDurations]);
+
+  const musicLaneAudioRefs = useRef<Array<HTMLAudioElement | null>>([null, null]);
+  const musicLaneAssetIdsRef = useRef<Array<string | null>>([null, null]);
+
+  useEffect(() => {
+    return () => {
+      musicLaneAudioRefs.current.forEach((audio) => {
+        try { audio?.pause(); } catch {}
+      });
+      musicLaneAudioRefs.current = [null, null];
+      musicLaneAssetIdsRef.current = [null, null];
+    };
+  }, []);
+
+  useEffect(() => {
+    const shouldPreviewTimelineMusic = musicTimelineClips.length > 0 && !!activeProjectId;
+    if (!shouldPreviewTimelineMusic) {
+      musicLaneAudioRefs.current.forEach((audio) => audio?.pause());
+      return;
+    }
+    musicElRef.current?.pause();
+    for (let lane = 0; lane < MUSIC_TRACK_COUNT; lane += 1) {
+      const activeClip = musicTimelineClips
+        .filter((clip) => clip.trackIndex === lane)
+        .find((clip) => musicPlayheadSecond >= clip.startSecond && musicPlayheadSecond < musicClipEnd(clip));
+      const audio = musicLaneAudioRefs.current[lane];
+      if (!activeClip || !activeProjectId) {
+        if (audio) audio.pause();
+        continue;
+      }
+      const asset = musicLibrary.find((item) => item.id === activeClip.assetId);
+      if (!asset) {
+        if (audio) audio.pause();
+        continue;
+      }
+      let laneAudio = audio;
+      if (!laneAudio || musicLaneAssetIdsRef.current[lane] !== asset.id) {
+        if (laneAudio) laneAudio.pause();
+        laneAudio = document.createElement('audio');
+        laneAudio.preload = 'auto';
+        laneAudio.crossOrigin = 'anonymous';
+        laneAudio.src = getMusicAssetUrl(activeProjectId, asset.id);
+        musicLaneAudioRefs.current[lane] = laneAudio;
+        musicLaneAssetIdsRef.current[lane] = asset.id;
+      }
+
+      const targetTime = Math.max(0, Math.min(
+        (musicAssetDurations[asset.id] ?? activeClip.durationSecond) - 0.01,
+        activeClip.sourceOffsetSecond + (musicPlayheadSecond - activeClip.startSecond),
+      ));
+      const gain = musicFadeGainAtTime(activeClip, musicPlayheadSecond);
+      const duck = music.sidechain.enabled ? musicDuckGainRef.current : 1;
+      laneAudio.volume = (music.muted || !musicLayerOn || muted) ? 0 : Math.max(0, Math.min(1, music.volume * gain * duck));
+      if (Math.abs((laneAudio.currentTime || 0) - targetTime) > 0.15) {
+        try { laneAudio.currentTime = targetTime; } catch {}
+      }
+      if (playing) {
+        laneAudio.play().catch(() => {});
+      } else {
+        laneAudio.pause();
+      }
+    }
+  }, [activeProjectId, music.muted, music.volume, music.sidechain.enabled, musicAssetDurations, musicLibrary, musicLayerOn, musicTimelineClips, muted, musicPlayheadSecond, playing]);
 
   // mirror state into refs the raf loop reads
   const bgLayerOnRef = useRef(bgLayerOn);
@@ -187,11 +411,11 @@ export const App: React.FC = () => {
   const playheadRef = useRef(playheadSecond);
   const activeExportParamsRef = useRef(activeExportParams);
   const timelineDurationRef = useRef(timelineDuration);
-  const selectedClipRef = useRef(selectedClip);
+  const selectedClipRef = useRef(selectedTimelineSegment);
 
   useRefSync(
     { bgLayerOnRef, videoLayerOnRef, audioReactivityRef, musicRef, playingRef, playheadRef, activeExportParamsRef, timelineDurationRef, selectedClipRef, activeProjectIdRef },
-    { bgLayerOn, videoLayerOn, audioReactivity, music, playing, playheadSecond, activeExportParams, timelineDuration, selectedClip, activeProjectId },
+    { bgLayerOn, videoLayerOn, audioReactivity, music, playing, playheadSecond, activeExportParams, timelineDuration, selectedClip: selectedTimelineSegment, activeProjectId },
   );
 
   // ---------- toasts ----------
@@ -250,14 +474,14 @@ export const App: React.FC = () => {
 
   // ---------- auto-save settings to active project ----------
   useAutoSave(activeProjectId, {
-    bg, bgDither, vid, audioReactivity, music, limiter,
+    bg, bgDither, vid, audioReactivity, music, musicLibraryDurations: musicAssetDurations, musicTimelineClips, limiter,
     captionMode, captionStyle, captionShader,
     bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn,
     activeGuide, cropToGuide, bgExport, vidExport,
     microTimelines, selectedClipId,
-    customCuts, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
+    customCuts, jumpCutGapOverrides, jumpCutGapDisabled, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
     showSilenceGaps, showFillerCuts, showManualCuts,
-    mainTab, bgSubTab, videoSubTab, audioSubTab, captionsSubTab, muted, mediaVolume, outroVolume,
+    mainTab, bgSubTab, videoSubTab, audioSubTab, captionsSubTab, editorSubTab, editorMode, selectedFullSegmentId, showAudioTracks, muted, mediaVolume, outroVolume,
     videoShaderSubTab,
     projectHasVideo: !!activeProject?.hasVideo,
     projectHasAudio: !!activeProject?.hasAudio,
@@ -272,7 +496,7 @@ export const App: React.FC = () => {
       captionMode, captionStyle, captionShader,
       bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn,
       activeGuide, cropToGuide, bgExport, vidExport,
-      microTimelines, selectedClipId, customCuts,
+      microTimelines, selectedClipId, musicTimelineClips, selectedMusicClipId, showAudioTracks, customCuts, jumpCutGapOverrides, jumpCutGapDisabled,
       jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
       showSilenceGaps, showFillerCuts, showManualCuts, muted, mediaVolume, outroVolume,
     },
@@ -281,7 +505,7 @@ export const App: React.FC = () => {
       setCaptionMode, setCaptionStyle, setCaptionShader,
       setBgLayerOn, setBgOffMode, setBgOffColor, setVideoLayerOn, setCaptionsLayerOn, setMusicLayerOn,
       setActiveGuide, setCropToGuide, setBgExport, setVidExport,
-      setMicroTimelines, setSelectedClipId, setCustomCuts,
+      setMicroTimelines, setSelectedClipId, setMusicTimelineClips, setSelectedMusicClipId, setShowAudioTracks, setCustomCuts, setJumpCutGapOverrides, setJumpCutGapDisabled,
       setJumpCutsEnabled, setJumpCutGapMs, setJumpCutPaddingMs, setCustomCutPaddingMs,
       setShowSilenceGaps, setShowFillerCuts, setShowManualCuts, setMuted, setMediaVolume, setOutroVolume,
     },
@@ -298,19 +522,19 @@ export const App: React.FC = () => {
   // ---------- project handlers ----------
   const projectRefs = { mediaElRef, videoElRef, audioElRef, audioSourceRef, videoRendererRef, musicElRef, musicPlayerRef };
   const projectSetters = {
-    setProjects, setActiveProjectId, setProjectStatus,
+      setProjects, setActiveProjectId, setProjectStatus,
       setMainTab, setBgSubTab, setVideoSubTab, setAudioSubTab,
-      setVideoShaderSubTab, setCaptionsSubTab,
-    setBg, setBgDither, setVid, setBgExport, setVidExport,
-    setActiveGuide, setCropToGuide, setBgLayerOn, setBgOffMode, setBgOffColor, setVideoLayerOn, setCaptionsLayerOn, setMusicLayerOn,
-    setCaptionMode, setCaptionStyle, setCaptionShader,
-    setMuted, setMediaVolume, setOutroVolume,
-    setVideoInfo, setAudioInfo, setPlayheadSecond, setTranscript, setTranscriptName, setCaptionClipEdits, setPlaying,
-    setAudioReactivity, setMusicInfo, setMusic, setLimiter,
-    setMicroTimelines, setSelectedClipId, setPendingClipStart,
-    setCustomCuts, setJumpCutsEnabled, setJumpCutGapMs, setJumpCutPaddingMs, setCustomCutPaddingMs,
-    setShowSilenceGaps, setShowFillerCuts, setShowManualCuts,
-    addToast,
+      setVideoShaderSubTab, setCaptionsSubTab, setEditorSubTab, setEditorMode,
+      setBg, setBgDither, setVid, setBgExport, setVidExport,
+      setActiveGuide, setCropToGuide, setBgLayerOn, setBgOffMode, setBgOffColor, setVideoLayerOn, setCaptionsLayerOn, setMusicLayerOn,
+      setCaptionMode, setCaptionStyle, setCaptionShader,
+      setMuted, setMediaVolume, setOutroVolume,
+      setVideoInfo, setAudioInfo, setPlayheadSecond, setTranscript, setTranscriptName, setCaptionClipEdits, setPlaying,
+      setAudioReactivity, setMusicInfo, setMusic, setMusicLibrary, setMusicAssetDurations, setSelectedMusicAssetIds, setMusicTimelineClips, setSelectedMusicClipId, setLimiter,
+      setMicroTimelines, setSelectedClipId, setSelectedFullSegmentId, setPendingClipStart,
+      setCustomCuts, setJumpCutGapOverrides, setJumpCutGapDisabled, setSelectedGapKey, setJumpCutsEnabled, setJumpCutGapMs, setJumpCutPaddingMs, setCustomCutPaddingMs,
+      setShowSilenceGaps, setShowFillerCuts, setShowManualCuts, setShowAudioTracks,
+      addToast,
   };
   const handleCreateProject = createHandleCreateProject(projectRefs, projectSetters);
   const handleSelectProject = createHandleSelectProject(projectRefs, projectSetters);
@@ -340,18 +564,150 @@ export const App: React.FC = () => {
     if (f) loadFile(f);
   };
   const playbackRefs = { mediaElRef, audioSourceRef, musicElRef, musicPlayerRef, playingInClipRef };
-  const playbackState = { music, musicLayerOn, videoInfo, audioInfo, selectedClip };
+  const playbackState = { music, musicLayerOn, hasTimelineMusic: musicTimelineClips.length > 0, videoInfo, audioInfo, selectedClip: selectedTimelineSegment };
   const playbackSetters = { setPlaying, setPlayheadSecond, setPlaybackStartMs, setMuted };
   const togglePlay = createTogglePlay(playbackRefs, playbackState, playbackSetters);
   const togglePlayRef = useRef(togglePlay);
   useEffect(() => { togglePlayRef.current = togglePlay; });
   const handleSeekPlayhead = createHandleSeekPlayhead(playbackRefs, playbackState, playbackSetters);
   usePlaybackKeyboard(mediaElRef, previewWrapRef, togglePlayRef, setMuted);
+  const handleMusicTimelineSeek = (second: number) => {
+    handleTimelineSeek(outputToSourceTime(second, activeSkipTimeGaps, mediaDuration));
+  };
 
   // ---------- transcript file load & save ----------
   const { handleEditorUpdateTranscript, onPickTranscript } = useTranscriptHandlers({
     activeProjectIdRef, setProjects, setProjectStatus, setTranscript, setTranscriptName, addToast,
   });
+
+  // ---------- music library / arrangement ----------
+  const handlePickMusicFiles = async (files: File[]) => {
+    const pid = activeProjectIdRef.current;
+    if (!pid || files.length === 0) return;
+    const durations = await Promise.all(files.map((file) => readLocalAudioDuration(file)));
+    const uploadId = addToast('Importing music files…', 'progress', true);
+    try {
+      const result = await uploadMusicFiles(pid, files, (pct) => updateToast(uploadId, `Importing music… ${pct}%`, 'progress'));
+      updateToast(uploadId, `${result.assets.length} music file${result.assets.length === 1 ? '' : 's'} imported`, 'success');
+      setMusicLibrary((prev) => [...prev, ...result.assets]);
+      setSelectedMusicAssetIds((prev) => [...new Set([...prev, ...result.assets.map((asset) => asset.id)])]);
+      setMusicAssetDurations((prev) => {
+        const next = { ...prev };
+        result.assets.forEach((asset, index) => {
+          const duration = durations[index];
+          if (Number.isFinite(duration) && duration > 0) next[asset.id] = duration;
+        });
+        return next;
+      });
+      listProjects().then(setProjects);
+    } catch (error: any) {
+      updateToast(uploadId, `Music import failed: ${error?.message ?? error}`, 'error');
+    }
+  };
+
+  const handleDeleteMusicAsset = async (assetId: string) => {
+    const pid = activeProjectIdRef.current;
+    if (!pid) return;
+    try {
+      await deleteMusicAsset(pid, assetId);
+      setMusicLibrary((prev) => prev.filter((asset) => asset.id !== assetId));
+      setSelectedMusicAssetIds((prev) => prev.filter((id) => id !== assetId));
+      setMusicTimelineClips((prev) => prev.filter((clip) => clip.assetId !== assetId));
+      if (selectedMusicClipId && musicTimelineClips.find((clip) => clip.id === selectedMusicClipId)?.assetId === assetId) {
+        setSelectedMusicClipId(null);
+      }
+      setMusicAssetDurations((prev) => {
+        const next = { ...prev };
+        delete next[assetId];
+        return next;
+      });
+      listProjects().then(setProjects);
+    } catch (error: any) {
+      addToast(`Failed to remove music: ${error?.message ?? error}`, 'error');
+    }
+  };
+
+  const handleAutoArrangeSelectedMusic = () => {
+    const chosenAssets = musicLibrary.filter((asset) => selectedMusicAssetIds.includes(asset.id));
+    if (chosenAssets.length === 0) {
+      addToast('Select at least one music file first', 'error');
+      return;
+    }
+    let cursor = musicTimelineClips.length > 0
+      ? Math.max(...musicTimelineClips.map((clip) => musicClipEnd(clip))) - MUSIC_DEFAULT_OVERLAP_SECONDS
+      : 0;
+    const baseIndex = musicTimelineClips.length;
+    const newClips: MusicTimelineClip[] = chosenAssets.map((asset, index) => {
+      const durationSecond = Math.max(0.01, musicAssetDurations[asset.id] ?? 30);
+      const trackIndex = ((baseIndex + index) % MUSIC_TRACK_COUNT) as 0 | 1;
+      const startSecond = Math.max(0, index === 0 ? cursor : cursor);
+      const fade = clampMusicFade(Math.min(5, MUSIC_DEFAULT_OVERLAP_SECONDS / 2, durationSecond / 3), durationSecond);
+      const clip: MusicTimelineClip = {
+        id: crypto.randomUUID(),
+        assetId: asset.id,
+        trackIndex,
+        startSecond,
+        durationSecond,
+        sourceOffsetSecond: 0,
+        fadeInSecond: index === 0 && musicTimelineClips.length === 0 ? 0 : fade,
+        fadeOutSecond: fade,
+        color: MICRO_TIMELINE_COLORS[(baseIndex + index) % MICRO_TIMELINE_COLORS.length],
+      };
+      cursor = startSecond + durationSecond - MUSIC_DEFAULT_OVERLAP_SECONDS;
+      return clip;
+    });
+    setMusicTimelineClips((prev) => [...prev, ...newClips]);
+    setSelectedMusicClipId(newClips[0]?.id ?? null);
+    setShowAudioTracks(true);
+    setMainTab('audio');
+    setAudioSubTab('music');
+  };
+
+  const handleUpdateSelectedMusicClip = (patch: Partial<MusicTimelineClip>) => {
+    if (!selectedMusicClipId) return;
+    setMusicTimelineClips((prev) => prev.map((clip) => {
+      if (clip.id !== selectedMusicClipId) return clip;
+      const durationSecond = patch.durationSecond ?? clip.durationSecond;
+      const next = { ...clip, ...patch, durationSecond };
+      next.fadeInSecond = clampMusicFade(patch.fadeInSecond ?? next.fadeInSecond, durationSecond);
+      next.fadeOutSecond = clampMusicFade(patch.fadeOutSecond ?? next.fadeOutSecond, durationSecond);
+      next.startSecond = Math.max(0, next.startSecond);
+      next.sourceOffsetSecond = Math.max(0, next.sourceOffsetSecond);
+      return next;
+    }));
+  };
+
+  const handleMoveMusicClip = (id: string, startSecond: number, trackIndex?: 0 | 1) => {
+    setMusicTimelineClips((prev) => prev.map((clip) => {
+      if (clip.id !== id) return clip;
+      return {
+        ...clip,
+        startSecond: Math.max(0, startSecond),
+        trackIndex: trackIndex ?? clip.trackIndex,
+      };
+    }));
+  };
+
+  const handleAdjustMusicClipFade = (id: string, kind: 'fadeInSecond' | 'fadeOutSecond', value: number) => {
+    setSelectedMusicClipId(id);
+    setMusicTimelineClips((prev) => prev.map((clip) => {
+      if (clip.id !== id) return clip;
+      const next = { ...clip };
+      next[kind] = clampMusicFade(value, clip.durationSecond);
+      return next;
+    }));
+  };
+
+  const handleDeleteSelectedMusicClip = () => {
+    if (!selectedMusicClipId) return;
+    setMusicTimelineClips((prev) => prev.filter((clip) => clip.id !== selectedMusicClipId));
+    setSelectedMusicClipId(null);
+  };
+
+  const handleClearMusicTimeline = () => {
+    setMusicTimelineClips([]);
+    setSelectedMusicClipId(null);
+  };
 
   // ---------- export ----------
   const fitPreviewBack = () => {
@@ -363,7 +719,7 @@ export const App: React.FC = () => {
 
   const exportComposition = createExportComposition(
     { activeProjectIdRef, bgRendererRef, videoRendererRef, videoElRef, audioElRef, audioSourceRef, activeExportParamsRef, exportingRef, startRef, jumpCutGapListRef },
-    { bg, bgDither, vid, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, jumpCutsEnabled, audioReactivity, captionMode, captionStyle, captionShader, transcript: effectiveTranscript, videoInfo, audioInfo, cropToGuide, activeGuide, availableGuides, previewFrame },
+    { bg, bgDither, vid, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, jumpCutsEnabled, audioReactivity, music, limiter, mediaVolume, outroVolume, musicTimelineClips, captionMode, captionStyle, captionShader, transcript: effectiveTranscript, videoInfo, audioInfo, cropToGuide, activeGuide, availableGuides, previewFrame },
     { setPlaying, setProjectStatus, addToast, updateToast, fitPreviewBack },
   );
 
@@ -503,16 +859,29 @@ export const App: React.FC = () => {
         onPlayheadChange={handleTimelineSeek}
         outroEnabled={activeExportParams.outroEnabled}
         onToggleOutro={handleToggleOutro}
-        microTimelines={microTimelines}
-        selectedId={selectedClipId}
-        pendingClipStart={pendingClipStart}
-        onSelectClip={setSelectedClipId}
-        onClipRangeChange={handleClipRangeChange}
-        onAddStart={handleAddClipStart}
-        onAddEnd={handleAddClipEnd}
-        onCancelPending={() => setPendingClipStart(null)}
-        onDeleteClip={handleDeleteClip}
-        onRenameClip={handleRenameClip}
+        microTimelines={timelineSegments}
+        timelineItemLabel={editorMode === 'clips' ? 'clip' : 'chunk'}
+        clipEditingEnabled={editorMode === 'clips'}
+        musicTimelineClips={musicTimelineClips}
+        musicClipLabels={musicClipLabels}
+        musicDuration={musicTimelineDuration}
+        musicPlayhead={musicPlayheadSecond}
+        selectedMusicClipId={selectedMusicClipId}
+        showAudioTracks={showAudioTracks}
+        selectedId={editorMode === 'clips' ? selectedClipId : selectedFullSegmentId}
+        pendingClipStart={editorMode === 'clips' ? pendingClipStart : null}
+        onSelectClip={editorMode === 'clips' ? setSelectedClipId : setSelectedFullSegmentId}
+        onSelectMusicClip={setSelectedMusicClipId}
+        onMusicPlayheadChange={handleMusicTimelineSeek}
+        onClipRangeChange={editorMode === 'clips' ? handleClipRangeChange : undefined}
+        onMoveMusicClip={handleMoveMusicClip}
+        onAdjustMusicClipFade={handleAdjustMusicClipFade}
+        onAddStart={editorMode === 'clips' ? handleAddClipStart : undefined}
+        onAddEnd={editorMode === 'clips' ? handleAddClipEnd : undefined}
+        onCancelPending={editorMode === 'clips' ? (() => setPendingClipStart(null)) : undefined}
+        onDeleteClip={editorMode === 'clips' ? handleDeleteClip : undefined}
+        onRenameClip={editorMode === 'clips' ? handleRenameClip : undefined}
+        onToggleAudioTracks={() => setShowAudioTracks((value) => !value)}
         skipGapsEnabled={jumpCutsEnabled}
         skipGaps={jumpCutGaps}
         skipGapsEffective={jumpCutGapsEffective}
@@ -530,8 +899,13 @@ export const App: React.FC = () => {
       <SidebarPanel
         projects={projects} activeProjectId={activeProjectId} activeProject={activeProject} projectStatus={projectStatus}
         onSelectProject={handleSelectProject} onCreateProject={handleCreateProject}
-        videoInfo={videoInfo} audioInfo={audioInfo} audioMode={audioMode} playheadSecond={playheadSecond}
+        videoInfo={videoInfo} audioInfo={audioInfo} audioMode={audioMode} playheadSecond={playheadSecond} mediaDuration={mediaDuration}
         playing={playing} togglePlay={togglePlay} muted={muted} setMuted={setMuted}
+        editorSubTab={editorSubTab} setEditorSubTab={setEditorSubTab}
+        editorMode={editorMode} setEditorMode={setEditorMode}
+        clipCount={microTimelines.length}
+        fullChunkCount={fullExportChunks.length}
+        fullChunkSpanSec={FULL_EXPORT_CHUNK_SECONDS}
         transcript={transcript} transcriptName={transcriptName}
         jumpCutsEnabled={jumpCutsEnabled} setJumpCutsEnabled={setJumpCutsEnabled}
         jumpCutGapMs={jumpCutGapMs} setJumpCutGapMs={setJumpCutGapMs}
@@ -590,6 +964,21 @@ export const App: React.FC = () => {
         audioReactivity={audioReactivity} setAudioReactivity={setAudioReactivity}
         lastBandsRef={lastBandsRef}
         music={music} setMusic={setMusic} musicInfo={musicInfo}
+        musicLibrary={musicLibrary}
+        musicAssetDurations={musicAssetDurations}
+        selectedMusicAssetIds={selectedMusicAssetIds}
+        setSelectedMusicAssetIds={setSelectedMusicAssetIds}
+        musicTimelineClips={musicTimelineClips}
+        selectedMusicClip={selectedMusicClip}
+        selectedMusicClipName={selectedMusicClip ? (musicLibrary.find((asset) => asset.id === selectedMusicClip.assetId)?.originalName ?? null) : null}
+        showAudioTracks={showAudioTracks}
+        setShowAudioTracks={setShowAudioTracks}
+        onPickMusicFiles={handlePickMusicFiles}
+        onDeleteMusicAsset={handleDeleteMusicAsset}
+        onAutoArrangeSelectedMusic={handleAutoArrangeSelectedMusic}
+        onUpdateSelectedMusicClip={handleUpdateSelectedMusicClip}
+        onDeleteSelectedMusicClip={handleDeleteSelectedMusicClip}
+        onClearMusicTimeline={handleClearMusicTimeline}
         onPickMusicFile={(f) => {
           if (activeProjectIdRef.current) loadMusicFile(f, activeProjectIdRef.current);
           else addToast('Select project first', 'error');
@@ -601,7 +990,7 @@ export const App: React.FC = () => {
         outroVolume={outroVolume} setOutroVolume={setOutroVolume}
         activeExportParams={activeExportParams} setActiveExportParams={setActiveExportParams}
         exportComposition={exportComposition} exportLayerSummary={exportLayerSummary}
-        selectedClipName={selectedClip?.name}
+        selectedClipName={selectedTimelineSegment?.name}
         currentPresetSettings={currentPresetSettings}
         onApplyPresetSettings={applyPresetSettings}
         addToast={addToast}

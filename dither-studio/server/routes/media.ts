@@ -3,6 +3,7 @@ import { execFile } from 'child_process';
 import multer from 'multer';
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 import { runTranscriptionPipeline, runAudioTranscriptionPipeline } from '../transcribe.js';
 import {
@@ -160,7 +161,7 @@ const musicUpload = multer({
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
-    filename: (_req, file, cb) => cb(null, safeMusicFilename(file.originalname)),
+    filename: (_req, file, cb) => cb(null, `${randomUUID().slice(0, 8)}-${safeMusicFilename(file.originalname)}`),
   }),
   limits: { fileSize: 1024 * 1024 * 1024 },
 });
@@ -305,64 +306,38 @@ mediaRoutes.get('/:id/audio', (req, res) => {
 
 // ── music ─────────────────────────────────────────────────────────────────────
 
-// Upload backing music — saved to the project folder; no transcription.
-mediaRoutes.post('/:id/music', musicUpload.single('music'), (req, res) => {
-  const id = req.params.id as string;
-  const proj = readProject(id);
-  if (!proj || !req.file) {
-    res.status(400).json({ error: 'Bad request' });
-    return;
+function ensureMusicLibrary(proj: NonNullable<ReturnType<typeof readProject>>) {
+  if (!Array.isArray(proj.musicFiles)) {
+    proj.musicFiles = [];
   }
-
-  // Replace any existing music file so we don't accumulate orphans.
-  if (proj.musicFile && proj.musicFile !== req.file.filename) {
-    try { fs.unlinkSync(path.join(projectDir(id), proj.musicFile)); } catch {}
-  }
-  proj.musicFile = req.file.filename;
-  proj.originalMusicName = req.file.originalname;
-  proj.updatedAt = new Date().toISOString();
-  writeProject(id, proj);
-
-  res.json({ ok: true, filename: req.file.filename, originalName: req.file.originalname });
-});
-
-// Delete the project's music file (if any) and clear it from project.json.
-mediaRoutes.delete('/:id/music', (req, res) => {
-  const id = req.params.id as string;
-  const proj = readProject(id);
-  if (!proj) {
-    res.status(404).json({ error: 'Not found' });
-    return;
-  }
-
   if (proj.musicFile) {
-    try { fs.unlinkSync(path.join(projectDir(id), proj.musicFile)); } catch {}
-    delete proj.musicFile;
-    delete proj.originalMusicName;
-    proj.updatedAt = new Date().toISOString();
-    writeProject(id, proj);
+    const legacyExists = proj.musicFiles.some((asset) => asset.filename === proj.musicFile);
+    if (!legacyExists) {
+      proj.musicFiles.push({
+        id: 'legacy-music',
+        filename: proj.musicFile,
+        originalName: proj.originalMusicName || proj.musicFile,
+      });
+    }
   }
-  res.json({ ok: true });
-});
+  return proj.musicFiles;
+}
 
-// Serve music with range-request support (same MIME table as audio).
-mediaRoutes.get('/:id/music', (req, res) => {
-  const proj = readProject(req.params.id);
-  if (!proj?.musicFile) return void res.status(404).json({ error: 'No music' });
-  const mp = path.join(projectDir(req.params.id), proj.musicFile);
-  if (!fs.existsSync(mp)) return void res.status(404).json({ error: 'File not found' });
+function getMusicMime(filename: string) {
+  const ext = path.extname(filename).toLowerCase();
+  return ext === '.wav' ? 'audio/wav'
+    : ext === '.m4a' ? 'audio/mp4'
+    : ext === '.flac' ? 'audio/flac'
+    : ext === '.ogg' ? 'audio/ogg'
+    : ext === '.opus' ? 'audio/ogg'
+    : ext === '.aac' ? 'audio/aac'
+    : 'audio/mpeg';
+}
 
-  const stat = fs.statSync(mp);
+function streamRangedAudio(filePath: string, filename: string, req: any, res: any) {
+  const stat = fs.statSync(filePath);
   const total = stat.size;
-  const ext = path.extname(proj.musicFile).toLowerCase();
-  const mime =
-    ext === '.wav' ? 'audio/wav' :
-    ext === '.m4a' ? 'audio/mp4' :
-    ext === '.flac' ? 'audio/flac' :
-    ext === '.ogg' ? 'audio/ogg' :
-    ext === '.opus' ? 'audio/ogg' :
-    ext === '.aac' ? 'audio/aac' :
-    'audio/mpeg';
+  const mime = getMusicMime(filename);
   const range = req.headers.range;
 
   if (range) {
@@ -375,11 +350,129 @@ mediaRoutes.get('/:id/music', (req, res) => {
       'Content-Length': end - start + 1,
       'Content-Type': mime,
     });
-    fs.createReadStream(mp, { start, end }).pipe(res);
+    fs.createReadStream(filePath, { start, end }).pipe(res);
   } else {
     res.writeHead(200, { 'Content-Length': total, 'Content-Type': mime, 'Accept-Ranges': 'bytes' });
-    fs.createReadStream(mp).pipe(res);
+    fs.createReadStream(filePath).pipe(res);
   }
+}
+
+// Upload one or more backing music files into the project library.
+mediaRoutes.post('/:id/music-library', musicUpload.array('music', 64), (req, res) => {
+  const id = req.params.id as string;
+  const proj = readProject(id);
+  const files = (req.files as ImportedMediaFile[] | undefined) ?? [];
+  if (!proj || files.length === 0) {
+    res.status(400).json({ error: 'Bad request' });
+    return;
+  }
+
+  const library = ensureMusicLibrary(proj);
+  const added = files.map((file) => {
+    const asset = {
+      id: randomUUID(),
+      filename: file.filename,
+      originalName: file.originalname,
+    };
+    library.push(asset);
+    return asset;
+  });
+  proj.updatedAt = new Date().toISOString();
+  writeProject(id, proj);
+
+  res.json({ ok: true, assets: added });
+});
+
+// Backward-compatible single upload endpoint: append one file to the library.
+mediaRoutes.post('/:id/music', musicUpload.single('music'), (req, res) => {
+  const id = req.params.id as string;
+  const proj = readProject(id);
+  if (!proj || !req.file) {
+    res.status(400).json({ error: 'Bad request' });
+    return;
+  }
+  const library = ensureMusicLibrary(proj);
+  const asset = {
+    id: randomUUID(),
+    filename: req.file.filename,
+    originalName: req.file.originalname,
+  };
+  library.push(asset);
+  proj.updatedAt = new Date().toISOString();
+  writeProject(id, proj);
+  res.json({ ok: true, assets: [asset], filename: req.file.filename, originalName: req.file.originalname });
+});
+
+// Delete one music asset from the project's library.
+mediaRoutes.delete('/:id/music/:assetId', (req, res) => {
+  const id = req.params.id as string;
+  const assetId = req.params.assetId as string;
+  const proj = readProject(id);
+  if (!proj) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+
+  const library = ensureMusicLibrary(proj);
+  const asset = library.find((item) => item.id === assetId);
+  if (!asset) {
+    res.status(404).json({ error: 'Music asset not found' });
+    return;
+  }
+
+  try { fs.unlinkSync(path.join(projectDir(id), asset.filename)); } catch {}
+  proj.musicFiles = library.filter((item) => item.id !== assetId);
+  if (asset.filename === proj.musicFile || assetId === 'legacy-music') {
+    delete proj.musicFile;
+    delete proj.originalMusicName;
+  }
+  proj.updatedAt = new Date().toISOString();
+  writeProject(id, proj);
+  res.json({ ok: true });
+});
+
+// Backward-compatible delete-all endpoint.
+mediaRoutes.delete('/:id/music', (req, res) => {
+  const id = req.params.id as string;
+  const proj = readProject(id);
+  if (!proj) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  const library = ensureMusicLibrary(proj);
+  for (const asset of library) {
+    try { fs.unlinkSync(path.join(projectDir(id), asset.filename)); } catch {}
+  }
+  proj.musicFiles = [];
+  delete proj.musicFile;
+  delete proj.originalMusicName;
+  proj.updatedAt = new Date().toISOString();
+  writeProject(id, proj);
+  res.json({ ok: true });
+});
+
+// Serve a specific music asset with range-request support.
+mediaRoutes.get('/:id/music/:assetId', (req, res) => {
+  const proj = readProject(req.params.id);
+  if (!proj) return void res.status(404).json({ error: 'No music' });
+  const library = ensureMusicLibrary(proj);
+  const asset = library.find((item) => item.id === req.params.assetId);
+  if (!asset) return void res.status(404).json({ error: 'No music asset' });
+  const mp = path.join(projectDir(req.params.id), asset.filename);
+  if (!fs.existsSync(mp)) return void res.status(404).json({ error: 'File not found' });
+  streamRangedAudio(mp, asset.filename, req, res);
+});
+
+// Backward-compatible legacy music endpoint: serve the first asset if present.
+mediaRoutes.get('/:id/music', (req, res) => {
+  const proj = readProject(req.params.id);
+  if (!proj) return void res.status(404).json({ error: 'No music' });
+  const library = ensureMusicLibrary(proj);
+  const asset = library[0];
+  if (!asset) return void res.status(404).json({ error: 'No music' });
+  const mp = path.join(projectDir(req.params.id), asset.filename);
+  if (!fs.existsSync(mp)) return void res.status(404).json({ error: 'File not found' });
+  streamRangedAudio(mp, asset.filename, req, res);
 });
 
 // ── captions ──────────────────────────────────────────────────────────────────

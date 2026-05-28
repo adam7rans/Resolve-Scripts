@@ -12,6 +12,7 @@ export interface ProjectMeta {
 
 export interface ProjectData extends ProjectMeta {
   videoFile?: string;
+  musicFiles?: Array<{ id: string; filename: string; originalName: string }>;
   [key: string]: any;
 }
 
@@ -150,6 +151,7 @@ export async function createProjectExport(
     duration?: number;
     baseDuration?: number;
     outroDuration?: number;
+    musicOutputStartTime?: number;
     /**
      * Source-relative time segments to keep (in seconds). Used by the server
      * to edit/concat the audio when the user has enabled jump-cut silence
@@ -158,6 +160,23 @@ export async function createProjectExport(
      */
     keptSegments?: Array<{ srcStart: number; srcEnd: number }>;
     layers: Record<string, boolean>;
+    musicTimelineClips?: Array<{
+      id: string;
+      assetId: string;
+      trackIndex: 0 | 1;
+      startSecond: number;
+      durationSecond: number;
+      sourceOffsetSecond: number;
+      fadeInSecond: number;
+      fadeOutSecond: number;
+      color: string;
+    }>;
+    musicSnapshot?: Record<string, any>;
+    limiter?: Record<string, any>;
+    ui?: {
+      mediaVolume?: number;
+      outroVolume?: number;
+    };
   },
 ): Promise<{ ok: boolean; exportId: string; folder: string }> {
   const res = await fetch(`${BASE}/projects/${id}/exports`, {
@@ -207,8 +226,16 @@ export function getMusicUrl(id: string): string {
   return `${BASE}/projects/${id}/music`;
 }
 
+export function getMusicAssetUrl(id: string, assetId: string): string {
+  return `${BASE}/projects/${id}/music/${assetId}`;
+}
+
 export async function deleteMusic(id: string): Promise<void> {
   await fetch(`${BASE}/projects/${id}/music`, { method: 'DELETE' });
+}
+
+export async function deleteMusicAsset(id: string, assetId: string): Promise<void> {
+  await fetch(`${BASE}/projects/${id}/music/${assetId}`, { method: 'DELETE' });
 }
 
 export async function uploadMusic(
@@ -231,6 +258,30 @@ export async function uploadMusic(
     xhr.onerror = () => reject(new Error('Network error'));
     const form = new FormData();
     form.append('music', file);
+    xhr.send(form);
+  });
+}
+
+export async function uploadMusicFiles(
+  id: string,
+  files: File[],
+  onProgress?: (pct: number) => void,
+): Promise<{ ok: boolean; assets: Array<{ id: string; filename: string; originalName: string }> }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE}/projects/${id}/music-library`);
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      });
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+      else reject(new Error(`Upload failed: ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error('Network error'));
+    const form = new FormData();
+    files.forEach((file) => form.append('music', file));
     xhr.send(form);
   });
 }

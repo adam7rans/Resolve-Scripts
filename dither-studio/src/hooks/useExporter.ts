@@ -11,11 +11,13 @@ import type {
   BackgroundParams,
   DitherParams,
   VideoShaderParams,
+  MusicTimelineClip,
 } from '../lib/types';
 import type { CaptionMode, TranscriptData } from '../lib/transcript';
 import type { ProjectTaskStatus } from '../lib/constants';
 import { GUIDES } from '../lib/constants';
 import { resolveExportRange, guideRectInVideoFrame } from '../lib/layoutUtils';
+import { sourceToOutputTime } from '../lib/timeMapping';
 import { buildExportBaseName, canvasToPngBlob, frameNumber, seekVideoTo } from '../lib/exporter';
 import { drawCaptionsToCanvas } from '../lib/captionCanvas';
 import {
@@ -23,6 +25,8 @@ import {
 } from '../lib/projectApi';
 import type { JumpCutGap } from './useJumpCuts';
 import type { Toast } from '../components/StatusToast';
+import type { MusicParams } from '../lib/MusicPlayer';
+import type { LimiterParams } from '../lib/AudioSource';
 
 export interface ExporterRefs {
   activeProjectIdRef: React.MutableRefObject<string | null>;
@@ -46,8 +50,14 @@ export interface ExporterState {
   bgOffColor: string;
   videoLayerOn: boolean;
   captionsLayerOn: boolean;
+  musicLayerOn: boolean;
   jumpCutsEnabled: boolean;
   audioReactivity: AudioReactivityParams;
+  music: MusicParams;
+  limiter: LimiterParams;
+  mediaVolume: number;
+  outroVolume: number;
+  musicTimelineClips: MusicTimelineClip[];
   captionMode: CaptionMode;
   captionStyle: CaptionStyle;
   captionShader: CaptionShaderParams;
@@ -78,7 +88,7 @@ export function createExportComposition(
     signal: AbortSignal,
   ) => {
     const { activeProjectIdRef, bgRendererRef, videoRendererRef, videoElRef, audioElRef, audioSourceRef, activeExportParamsRef, exportingRef, startRef, jumpCutGapListRef } = refs;
-    const { bg, bgDither, vid, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, jumpCutsEnabled, audioReactivity, captionMode, captionStyle, captionShader, transcript, videoInfo, audioInfo, cropToGuide, activeGuide, availableGuides, previewFrame } = state;
+    const { bg, bgDither, vid, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, jumpCutsEnabled, audioReactivity, music, limiter, mediaVolume, outroVolume, musicTimelineClips, captionMode, captionStyle, captionShader, transcript, videoInfo, audioInfo, cropToGuide, activeGuide, availableGuides, previewFrame } = state;
     const { setPlaying, setProjectStatus, addToast, updateToast, fitPreviewBack } = callbacks;
 
     const projectId = activeProjectIdRef.current;
@@ -139,6 +149,8 @@ export function createExportComposition(
         kept.push({ srcStart: range.start, srcEnd: range.end, outStart: 0 });
       }
     }
+    const activeGapTimeGaps = activeGapsForExport.map((gap) => ({ start: gap.start, end: gap.end }));
+    const musicOutputStartTime = sourceToOutputTime(range.start, activeGapTimeGaps);
     const lastKept = kept[kept.length - 1];
     const contentDuration = lastKept.outStart + (lastKept.srcEnd - lastKept.srcStart);
     const duration = contentDuration + range.outroDuration;
@@ -202,6 +214,7 @@ export function createExportComposition(
         duration,
         baseDuration: contentDuration,
         outroDuration: range.outroDuration,
+        musicOutputStartTime,
         keptSegments: activeGapsForExport.length > 0
           ? kept.map(({ srcStart, srcEnd }) => ({ srcStart, srcEnd }))
           : undefined,
@@ -209,6 +222,14 @@ export function createExportComposition(
           background: bgLayerOn,
           video: videoLayerOn,
           captions: captionsLayerOn,
+          music: musicLayerOn,
+        },
+        musicTimelineClips,
+        musicSnapshot: music,
+        limiter,
+        ui: {
+          mediaVolume,
+          outroVolume,
         },
       });
       setProjectStatus({ kind: 'progress', message: 'Exporting PNG sequence', detail: created.folder, progress: 0 });

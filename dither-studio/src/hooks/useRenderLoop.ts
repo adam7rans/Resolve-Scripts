@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { BackgroundRenderer } from '../lib/BackgroundRenderer';
 import { VideoRenderer } from '../lib/VideoRenderer';
 import type { AudioSource, AudioBands } from '../lib/AudioSource';
-import type { MusicPlayer, MusicParams } from '../lib/MusicPlayer';
+import { advanceSidechainDuckGain, computeSidechainTargetDuckGain, type MusicPlayer, type MusicParams } from '../lib/MusicPlayer';
 import type { BackgroundParams, DitherParams, VideoShaderParams, ExportParams, AudioReactivityParams } from '../lib/types';
 import { resolveExportRange } from '../lib/layoutUtils';
 
@@ -69,10 +69,14 @@ export function useRenderLoop(
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(previewWrapRef.current!);
+    let lastDuckMs = performance.now();
 
     const loop = () => {
       if (!exportingRef.current) {
         const t = (performance.now() - startRef.current) / 1000;
+        const nowMs = performance.now();
+        const duckDt = Math.max(0.001, (nowMs - lastDuckMs) / 1000);
+        lastDuckMs = nowMs;
 
         const audio = audioSourceRef.current;
         const ar = audioReactivityRef.current;
@@ -111,10 +115,14 @@ export function useRenderLoop(
         }
 
         const player = musicPlayerRef.current;
+        const m = musicRef.current;
+        const targetDuck = computeSidechainTargetDuckGain(voiceIntensity, m.sidechain);
         if (player) {
-          const m = musicRef.current;
           speechRmsRef.current = voiceIntensity;
           musicDuckGainRef.current = player.applySidechain(voiceIntensity, m.sidechain);
+        } else {
+          speechRmsRef.current = voiceIntensity;
+          musicDuckGainRef.current = advanceSidechainDuckGain(musicDuckGainRef.current, targetDuck, m.sidechain, duckDt);
         }
 
         if (audio) limiterReductionRef.current = audio.getLimiterReductionDb();

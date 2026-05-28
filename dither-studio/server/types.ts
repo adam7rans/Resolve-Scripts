@@ -1,3 +1,9 @@
+export interface MusicAsset {
+  id: string;
+  filename: string;
+  originalName: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -13,6 +19,7 @@ export interface Project {
   transcriptFile?: string;
   musicFile?: string;
   originalMusicName?: string;
+  musicFiles?: MusicAsset[];
 }
 
 export interface Settings {
@@ -31,7 +38,20 @@ export interface Settings {
       releaseMs: number;
     };
   };
+  musicLibraryDurations?: Record<string, number>;
+  musicTimelineClips?: any[];
   limiter?: any;
+  jumpCuts?: {
+    enabled?: boolean;
+    gapMs?: number;
+    paddingMs?: number;
+    customPaddingMs?: number;
+    showSilence?: boolean;
+    showFiller?: boolean;
+    showManual?: boolean;
+    overrides?: Record<string, { startMs: number; endMs: number }>;
+    disabled?: Record<string, true>;
+  };
   captionMode?: 'line' | 'word';
   captionStyle?: any;
   captionShader?: any;
@@ -50,6 +70,7 @@ export interface Settings {
     bgSubTab: string;
     videoSubTab: string;
     audioSubTab: string;
+    showAudioTracks?: boolean;
     muted: boolean;
     mediaVolume: number;
   };

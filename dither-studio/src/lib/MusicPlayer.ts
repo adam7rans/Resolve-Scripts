@@ -33,6 +33,27 @@ export interface MusicParams {
   sidechain: SidechainParams;
 }
 
+export function computeSidechainTargetDuckGain(speechRms: number, p: SidechainParams): number {
+  let target = 1.0;
+  if (p.enabled) {
+    const normalizedRms = Math.min(1, Math.max(0, speechRms));
+    if (normalizedRms > p.threshold) {
+      const over = normalizedRms - p.threshold;
+      const compression = Math.min(1, over * 4);
+      target = 1 - (compression * Math.max(0, Math.min(1, p.amount)));
+    }
+  }
+  return target;
+}
+
+export function advanceSidechainDuckGain(currentDuck: number, targetDuck: number, p: SidechainParams, dtSec: number): number {
+  const goingDown = targetDuck < currentDuck;
+  const tauMs = goingDown ? p.attackMs : p.releaseMs;
+  const tau = Math.max(0.001, tauMs / 1000);
+  const alpha = 1 - Math.exp(-Math.max(0.001, dtSec) / tau);
+  return currentDuck + (targetDuck - currentDuck) * alpha;
+}
+
 export class MusicPlayer {
   readonly element: HTMLAudioElement;
   private ctx: AudioContext | null = null;
@@ -101,30 +122,13 @@ export class MusicPlayer {
    */
   applySidechain(speechRms: number, p: SidechainParams): number {
     if (!this.duckGain || !this.ctx) return 1;
-
-    // Target duck gain: 1.0 at or below threshold, dropping toward (1 - amount)
-    // as speech approaches full volume. Linear above threshold.
-    let target = 1.0;
-    if (p.enabled) {
-      // `speechRms` is expected to be a normalized 0..1 voice intensity.
-      const normalizedRms = Math.min(1, Math.max(0, speechRms));
-      if (normalizedRms > p.threshold) {
-        const over = normalizedRms - p.threshold;
-        // Scale 'over' heavily so crossing the threshold causes significant ducking
-        const compression = Math.min(1, over * 4);
-        target = 1 - (compression * Math.max(0, Math.min(1, p.amount)));
-      }
-    }
+    const target = computeSidechainTargetDuckGain(speechRms, p);
 
     // Frame-rate-independent one-pole smoothing.
     const now = performance.now();
     const dt = Math.max(0.001, (now - this.lastTimeMs) / 1000);
     this.lastTimeMs = now;
-    const goingDown = target < this.currentDuck;
-    const tauMs = goingDown ? p.attackMs : p.releaseMs;
-    const tau = Math.max(0.001, tauMs / 1000);
-    const alpha = 1 - Math.exp(-dt / tau);
-    this.currentDuck = this.currentDuck + (target - this.currentDuck) * alpha;
+    this.currentDuck = advanceSidechainDuckGain(this.currentDuck, target, p, dt);
 
     // Apply to the GainNode. setTargetAtTime would also work, but a direct
     // assignment is fine when we update every frame.

@@ -4,12 +4,13 @@ import type { MusicParams } from '../../lib/MusicPlayer';
 import type {
   BackgroundParams, DitherParams, VideoShaderParams, ExportParams,
   CaptionStyle, AudioReactivityParams, CaptionShaderParams,
+  MusicAsset, MusicTimelineClip,
 } from '../../lib/types';
 import type { CaptionMode, TranscriptData } from '../../lib/transcript';
 import type { CustomCut } from '../../lib/fillerDetector';
 import type {
   MainTab, BgSubTab, VideoSubTab, VideoShaderSubTab, AudioSubTab, CaptionsSubTab,
-  ProjectTaskStatus, GuideKey,
+  EditorMode, EditorSubTab, ProjectTaskStatus, GuideKey,
 } from '../../lib/constants';
 import { GUIDES } from '../../lib/constants';
 import type { ProjectMeta } from '../../lib/projectApi';
@@ -19,6 +20,7 @@ import { ProjectBar } from '../ProjectBar';
 import { ProjectStatusPanel } from '../ProjectStatusPanel';
 import { ReactivityControls } from '../ReactivityControls';
 import { MusicControls } from '../MusicControls';
+import { MusicLibraryControls } from '../MusicLibraryControls';
 import { ExportPanel } from '../ExportPanel';
 import { ImportPresetPanel } from '../ImportPresetPanel';
 import { BackgroundPanel } from './BackgroundPanel';
@@ -39,12 +41,20 @@ interface Props {
   audioInfo: { name: string; duration: number } | null;
   audioMode: boolean;
   playheadSecond: number;
+  mediaDuration: number;
   // playback
   playing: boolean;
   togglePlay: () => void;
   muted: boolean;
   setMuted: React.Dispatch<React.SetStateAction<boolean>>;
   // jump cuts
+  editorSubTab: EditorSubTab;
+  setEditorSubTab: React.Dispatch<React.SetStateAction<EditorSubTab>>;
+  editorMode: EditorMode;
+  setEditorMode: React.Dispatch<React.SetStateAction<EditorMode>>;
+  clipCount: number;
+  fullChunkCount: number;
+  fullChunkSpanSec: number;
   transcript: TranscriptData | null;
   transcriptName: string | null;
   jumpCutsEnabled: boolean;
@@ -135,6 +145,21 @@ interface Props {
   music: MusicParams;
   setMusic: React.Dispatch<React.SetStateAction<MusicParams>>;
   musicInfo: { name: string } | null;
+  musicLibrary: MusicAsset[];
+  musicAssetDurations: Record<string, number>;
+  selectedMusicAssetIds: string[];
+  setSelectedMusicAssetIds: React.Dispatch<React.SetStateAction<string[]>>;
+  musicTimelineClips: MusicTimelineClip[];
+  selectedMusicClip: MusicTimelineClip | null;
+  selectedMusicClipName: string | null;
+  showAudioTracks: boolean;
+  setShowAudioTracks: React.Dispatch<React.SetStateAction<boolean>>;
+  onPickMusicFiles: (files: File[]) => void;
+  onDeleteMusicAsset: (assetId: string) => void;
+  onAutoArrangeSelectedMusic: () => void;
+  onUpdateSelectedMusicClip: (patch: Partial<MusicTimelineClip>) => void;
+  onDeleteSelectedMusicClip: () => void;
+  onClearMusicTimeline: () => void;
   onPickMusicFile: (f: File) => void;
   onClearMusic: () => void;
   musicDuckGainRef: React.MutableRefObject<number>;
@@ -281,13 +306,33 @@ export const SidebarPanel: React.FC<Props> = (p) => (
         <>
           <TabBar<AudioSubTab>
             tabs={[
-              { value: 'music',      label: 'Mixer' },
+              { value: 'music',      label: 'Music' },
+              { value: 'mixer',      label: 'Mixer' },
               { value: 'reactivity', label: 'Reactivity' },
             ]}
             value={p.audioSubTab}
             onChange={p.setAudioSubTab}
             variant="sub"
           />
+          {p.audioSubTab === 'music' && (
+            <MusicLibraryControls
+              assets={p.musicLibrary}
+              durations={p.musicAssetDurations}
+              selectedAssetIds={p.selectedMusicAssetIds}
+              onSelectedAssetIdsChange={p.setSelectedMusicAssetIds}
+              onPickFiles={p.onPickMusicFiles}
+              onDeleteAsset={p.onDeleteMusicAsset}
+              onAutoArrangeSelected={p.onAutoArrangeSelectedMusic}
+              arrangedClipCount={p.musicTimelineClips.length}
+              showAudioTracks={p.showAudioTracks}
+              onToggleShowAudioTracks={p.setShowAudioTracks}
+              onClearTimeline={p.onClearMusicTimeline}
+              selectedMusicClip={p.selectedMusicClip}
+              selectedMusicClipName={p.selectedMusicClipName}
+              onUpdateSelectedClip={p.onUpdateSelectedMusicClip}
+              onDeleteSelectedClip={p.onDeleteSelectedMusicClip}
+            />
+          )}
           {p.audioSubTab === 'reactivity' && (
             <ReactivityControls
               value={p.audioReactivity}
@@ -296,12 +341,12 @@ export const SidebarPanel: React.FC<Props> = (p) => (
               bandsRef={p.lastBandsRef}
             />
           )}
-          {p.audioSubTab === 'music' && (
+          {p.audioSubTab === 'mixer' && (
             <MusicControls
               value={p.music}
               onChange={p.setMusic}
-              hasMusic={!!p.musicInfo}
-              musicName={p.musicInfo?.name ?? null}
+              hasMusic={p.musicLibrary.length > 0 || !!p.musicInfo}
+              musicName={p.musicLibrary[0]?.originalName ?? p.musicInfo?.name ?? null}
               onPickFile={p.onPickMusicFile}
               onClear={p.onClearMusic}
               duckGainRef={p.musicDuckGainRef}
@@ -315,6 +360,7 @@ export const SidebarPanel: React.FC<Props> = (p) => (
               limiterReductionRef={p.limiterReductionRef}
               outroVolume={p.outroVolume}
               onOutroVolumeChange={p.setOutroVolume}
+              showFileSection={false}
             />
           )}
         </>
@@ -322,6 +368,14 @@ export const SidebarPanel: React.FC<Props> = (p) => (
 
       {p.mainTab === 'editor' && (
         <EditorPanel
+          editorSubTab={p.editorSubTab}
+          setEditorSubTab={p.setEditorSubTab}
+          editorMode={p.editorMode}
+          setEditorMode={p.setEditorMode}
+          clipCount={p.clipCount}
+          fullChunkCount={p.fullChunkCount}
+          fullChunkSpanSec={p.fullChunkSpanSec}
+          mediaDuration={p.mediaDuration}
           transcript={p.transcript}
           hasMedia={!!(p.videoInfo || p.audioInfo)}
           playheadSecond={p.playheadSecond}

@@ -1,5 +1,5 @@
 import type React from 'react';
-import type { MicroTimeline } from '../../lib/types';
+import type { MicroTimeline, MusicTimelineClip } from '../../lib/types';
 
 // ── constants ─────────────────────────────────────────────────────────────────
 export const HANDLE_W = 10;
@@ -20,6 +20,8 @@ export function fmt(sec: number) {
 export type DragKind =
   | null
   | { kind: 'clip-start' | 'clip-end'; id: string }
+  | { kind: 'music-move'; id: string; offset: number }
+  | { kind: 'music-fade-in' | 'music-fade-out'; id: string }
   | { kind: 'gap-start' | 'gap-end'; key: string }
   | 'play'
   | 'scroll';
@@ -31,15 +33,28 @@ export interface PreviewTimelineProps {
   outroEnabled?: boolean;
   onToggleOutro?: () => void;
   microTimelines: MicroTimeline[];
+  timelineItemLabel?: 'clip' | 'chunk';
+  clipEditingEnabled?: boolean;
+  musicTimelineClips?: MusicTimelineClip[];
+  musicClipLabels?: Record<string, string>;
+  musicDuration?: number;
+  musicPlayhead?: number;
+  selectedMusicClipId?: string | null;
+  showAudioTracks?: boolean;
   selectedId: string | null;
   pendingClipStart: number | null;
   onSelectClip: (id: string | null) => void;
-  onClipRangeChange: (id: string, start: number, end: number) => void;
-  onAddStart: () => void;
-  onAddEnd: () => void;
-  onCancelPending: () => void;
-  onDeleteClip: (id: string) => void;
-  onRenameClip: (id: string, name: string) => void;
+  onSelectMusicClip?: (id: string | null) => void;
+  onMusicPlayheadChange?: (playhead: number) => void;
+  onClipRangeChange?: (id: string, start: number, end: number) => void;
+  onMoveMusicClip?: (id: string, start: number, trackIndex?: 0 | 1) => void;
+  onAdjustMusicClipFade?: (id: string, kind: 'fadeInSecond' | 'fadeOutSecond', value: number) => void;
+  onAddStart?: () => void;
+  onAddEnd?: () => void;
+  onCancelPending?: () => void;
+  onDeleteClip?: (id: string) => void;
+  onRenameClip?: (id: string, name: string) => void;
+  onToggleAudioTracks?: () => void;
   skipGapsEnabled?: boolean;
   skipGaps?: Array<{ startMs: number; endMs: number; key: string }>;
   /** Effective skip zones after padding is applied — drawn as bright inner stripe */

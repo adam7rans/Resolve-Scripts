@@ -5,17 +5,23 @@ import {
   type DragKind, type PreviewTimelineProps,
 } from './timelineUtils';
 import { ClipTrackOverlay } from './ClipTrackOverlay';
+import { MusicTrackOverlay } from './MusicTrackOverlay';
 import { SkipGapOverlay } from './SkipGapOverlay';
 import { TimelineControls } from './TimelineControls';
 
 export type { PreviewTimelineProps };
 
+function clipEnd(clip: { startSecond: number; durationSecond: number }) {
+  return clip.startSecond + clip.durationSecond;
+}
+
 export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   duration, playhead, onPlayheadChange,
   outroEnabled, onToggleOutro,
-  microTimelines, selectedId, pendingClipStart,
-  onSelectClip, onClipRangeChange,
+  microTimelines, timelineItemLabel = 'clip', clipEditingEnabled = true, musicTimelineClips = [], musicClipLabels = {}, musicDuration, musicPlayhead, selectedMusicClipId = null, showAudioTracks = false, selectedId, pendingClipStart,
+  onSelectClip, onSelectMusicClip, onMusicPlayheadChange, onClipRangeChange, onMoveMusicClip, onAdjustMusicClipFade,
   onAddStart, onAddEnd, onCancelPending, onDeleteClip, onRenameClip,
+  onToggleAudioTracks,
   skipGapsEnabled = false, skipGaps = [], skipGapsEffective = [],
   skipGapOverrides = {}, onAdjustSkipGap, onResetSkipGap, onResetAllSkipGaps,
   skipGapDisabled = {}, selectedGapKey = null, onSelectGap, onToggleGapDisabled,
@@ -23,8 +29,11 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   const [hoverGapKey, setHoverGapKey] = useState<string | null>(null);
   const totalDuration = Math.max(0.01, duration);
   const projectDuration = totalDuration + (outroEnabled ? OUTRO_DUR : 0);
+  const effectiveMusicDuration = Math.max(0.01, musicDuration ?? projectDuration);
+  const effectiveMusicPlayhead = musicPlayhead ?? playhead;
 
   const [view, setView] = useState<{ s: number; e: number }>({ s: 0, e: projectDuration });
+  const [musicView, setMusicView] = useState<{ s: number; e: number }>({ s: 0, e: effectiveMusicDuration });
   const [followPlayhead, setFollowPlayhead] = useState(false);
 
   useEffect(() => {
@@ -32,9 +41,25 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
     setView({ s: 0, e: projectDuration });
   }, [projectDuration]);
 
+  useEffect(() => {
+    if (effectiveMusicDuration <= MIN_VIEW_SEC * 1.5) {
+      setMusicView({ s: 0, e: effectiveMusicDuration });
+      return;
+    }
+    setMusicView((prev) => {
+      const prevSpan = Math.max(MIN_VIEW_SEC, prev.e - prev.s);
+      const nextSpan = Math.min(effectiveMusicDuration, prevSpan);
+      const nextStart = clamp(prev.s, 0, Math.max(0, effectiveMusicDuration - nextSpan));
+      return { s: nextStart, e: nextStart + nextSpan };
+    });
+  }, [effectiveMusicDuration]);
+
   const viewStart = view.s;
   const viewEnd = Math.max(view.s + MIN_VIEW_SEC, Math.min(view.e, projectDuration));
   const viewSpan = Math.max(MIN_VIEW_SEC, viewEnd - viewStart);
+  const musicViewStart = musicView.s;
+  const musicViewEnd = Math.max(musicView.s + MIN_VIEW_SEC, Math.min(musicView.e, effectiveMusicDuration));
+  const musicViewSpan = Math.max(MIN_VIEW_SEC, musicViewEnd - musicViewStart);
 
   // Auto-scroll when followPlayhead is on and playhead leaves visible area
   useEffect(() => {
@@ -49,6 +74,7 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   });
 
   const trackRef = useRef<HTMLDivElement | null>(null);
+  const musicTrackRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [dragKind, setDragKind] = useState<DragKind>(null);
   const dragOffsetRef = useRef(0);
@@ -110,12 +136,42 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
           }
           case 'clip-start':
           case 'clip-end': {
+            if (!clipEditingEnabled || !onClipRangeChange) return;
             const clip = microTimelines.find(mt => mt.id === dragKind.id);
             if (!clip) return;
             if (dragKind.kind === 'clip-start') {
               onClipRangeChange(dragKind.id, clamp(t, 0, clip.endSecond - 0.01), clip.endSecond);
             } else {
               onClipRangeChange(dragKind.id, clip.startSecond, clamp(t, clip.startSecond + 0.01, totalDuration));
+            }
+            return;
+          }
+          case 'music-move': {
+            if (!onMoveMusicClip) return;
+            const musicT = musicTimeAtClientX(e.clientX);
+            const nextStart = Math.max(0, musicT - dragKind.offset);
+            const musicRect = musicTrackRef.current?.getBoundingClientRect();
+            let nextTrackIndex: 0 | 1 | undefined = undefined;
+            if (musicRect) {
+              const laneHeight = musicRect.height / 2;
+              const lane = clamp(Math.floor((e.clientY - musicRect.top) / Math.max(1, laneHeight)), 0, 1);
+              nextTrackIndex = lane as 0 | 1;
+            }
+            onMoveMusicClip(dragKind.id, nextStart, nextTrackIndex);
+            return;
+          }
+          case 'music-fade-in':
+          case 'music-fade-out': {
+            if (!onAdjustMusicClipFade) return;
+            const clip = musicTimelineClips.find((item) => item.id === dragKind.id);
+            if (!clip) return;
+            const musicT = musicTimeAtClientX(e.clientX);
+            if (dragKind.kind === 'music-fade-in') {
+              const nextFadeIn = clamp(musicT - clip.startSecond, 0, clip.durationSecond);
+              onAdjustMusicClipFade(dragKind.id, 'fadeInSecond', nextFadeIn);
+            } else {
+              const nextFadeOut = clamp(clipEnd(clip) - musicT, 0, clip.durationSecond);
+              onAdjustMusicClipFade(dragKind.id, 'fadeOutSecond', nextFadeOut);
             }
             return;
           }
@@ -131,7 +187,7 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [dragKind, viewSpan, projectDuration, totalDuration, microTimelines, onClipRangeChange, onPlayheadChange, viewStart, skipGaps, onAdjustSkipGap]);
+  }, [clipEditingEnabled, dragKind, viewSpan, projectDuration, totalDuration, microTimelines, musicTimelineClips, onClipRangeChange, onMoveMusicClip, onAdjustMusicClipFade, onPlayheadChange, viewStart, skipGaps, onAdjustSkipGap]);
 
   const startDrag = (kind: Exclude<DragKind, null | 'scroll'>) => (e: React.PointerEvent) => {
     e.preventDefault();
@@ -147,6 +203,15 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
     if (ne > projectDuration) { ne = projectDuration; ns = Math.max(0, ne - span); }
     if (ns < 0) { ns = 0; ne = Math.min(projectDuration, ns + span); }
     setView({ s: ns, e: ne });
+  };
+
+  const setMusicViewClamped = (s: number, e: number) => {
+    let span = Math.max(MIN_VIEW_SEC, Math.min(effectiveMusicDuration, e - s));
+    let ns = s;
+    let ne = ns + span;
+    if (ne > effectiveMusicDuration) { ne = effectiveMusicDuration; ns = Math.max(0, ne - span); }
+    if (ns < 0) { ns = 0; ne = Math.min(effectiveMusicDuration, ns + span); }
+    setMusicView({ s: ns, e: ne });
   };
 
   const focusClip = () => {
@@ -167,6 +232,14 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
   const zoomOut = () => {
     const newSpan = Math.min(projectDuration, viewSpan * 2);
     setViewClamped(playhead - newSpan / 2, playhead + newSpan / 2);
+  };
+  const zoomMusicIn = () => {
+    const newSpan = Math.max(MIN_VIEW_SEC, musicViewSpan / 2);
+    setMusicViewClamped(effectiveMusicPlayhead - newSpan / 2, effectiveMusicPlayhead + newSpan / 2);
+  };
+  const zoomMusicOut = () => {
+    const newSpan = Math.min(effectiveMusicDuration, musicViewSpan * 2);
+    setMusicViewClamped(effectiveMusicPlayhead - newSpan / 2, effectiveMusicPlayhead + newSpan / 2);
   };
   const resetView = () => setView({ s: 0, e: projectDuration });
 
@@ -189,15 +262,34 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
       if (e.key === '-') {
         e.preventDefault();
         zoomOut();
+        return;
+      }
+      if (e.key === ']') {
+        e.preventDefault();
+        zoomMusicIn();
+        return;
+      }
+      if (e.key === '[') {
+        e.preventDefault();
+        zoomMusicOut();
       }
     };
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [playhead, projectDuration, viewSpan]);
+  }, [playhead, projectDuration, viewSpan, effectiveMusicPlayhead, effectiveMusicDuration, musicViewSpan]);
 
   const scrollThumbPct = (viewSpan / projectDuration) * 100;
   const scrollThumbLeftPct = (viewStart / projectDuration) * 100;
+  const musicSecToPct = (t: number) => ((t - musicViewStart) / musicViewSpan) * 100;
+  const musicTimeAtClientX = (clientX: number) => {
+    const r = musicTrackRef.current?.getBoundingClientRect();
+    if (!r) return 0;
+    const x = clamp(clientX - r.left, 0, r.width);
+    return clamp(musicViewStart + (x / r.width) * musicViewSpan, 0, effectiveMusicDuration);
+  };
+  const musicVisPlay = musicSecToPct(effectiveMusicPlayhead);
+  const musicPlayheadVisible = musicVisPlay >= 0 && musicVisPlay <= 100;
 
   const onScrollDown: React.PointerEventHandler<HTMLDivElement> = (e) => {
     const r = scrollRef.current?.getBoundingClientRect();
@@ -224,12 +316,14 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
 
   const onTrackDown: React.PointerEventHandler<HTMLDivElement> = (e) => {
     onSelectGap?.(null);
+    onSelectMusicClip?.(null);
     onPlayheadChange(timeAtClientX(e.clientX));
     startDrag('play')(e);
   };
 
   const onPlayheadHandleDown: React.PointerEventHandler<HTMLDivElement> = (e) => {
     onSelectGap?.(null);
+    onSelectMusicClip?.(null);
     onPlayheadChange(timeAtClientX(e.clientX));
     startDrag('play')(e);
   };
@@ -252,7 +346,7 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
           <span>
             {selectedClip
               ? <>{selectedClip.name}: {fmt(selectedClip.startSecond)} → {fmt(selectedClip.endSecond)}</>
-              : `${microTimelines.length} clip${microTimelines.length !== 1 ? 's' : ''}`
+              : `${microTimelines.length} ${timelineItemLabel}${microTimelines.length !== 1 ? 's' : ''}`
             }
           </span>
           {skipGapsEnabled && skippedSec > 0 && (
@@ -309,8 +403,9 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
           microTimelines={microTimelines}
           selectedId={selectedId}
           selectedClip={selectedClip}
+          editHandlesEnabled={clipEditingEnabled}
           outroEnabled={outroEnabled}
-          pendingClipStart={pendingClipStart}
+          pendingClipStart={clipEditingEnabled ? pendingClipStart : null}
           secToPct={secToPct}
           timeAtClientX={timeAtClientX}
           onSelectClip={onSelectClip}
@@ -350,6 +445,42 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
         )}
       </div>
 
+      {showAudioTracks && (
+        <div
+          ref={musicTrackRef}
+          style={{
+            position: 'relative',
+            border: '1px solid #2a2a2a',
+            borderRadius: 4,
+            overflow: 'hidden',
+            background: '#101010',
+          }}
+        >
+          <MusicTrackOverlay
+            clips={musicTimelineClips}
+            clipLabels={musicClipLabels}
+            selectedMusicClipId={selectedMusicClipId}
+            dragKind={dragKind}
+            secToPct={musicSecToPct}
+            timeAtClientX={musicTimeAtClientX}
+            onSelectMusicClip={(id) => {
+              onSelectGap?.(null);
+              onSelectMusicClip?.(id);
+            }}
+            onPlayheadChange={(next) => (onMusicPlayheadChange ?? onPlayheadChange)(next)}
+            startDrag={startDrag}
+          />
+          {musicPlayheadVisible && (
+            <div style={{
+              position: 'absolute', left: `calc(${musicVisPlay}% - 1px)`,
+              top: 0, bottom: 0, width: 2,
+              background: '#fff', boxShadow: '0 0 4px rgba(255,255,255,0.7)',
+              pointerEvents: 'none', zIndex: 5,
+            }} />
+          )}
+        </div>
+      )}
+
       {/* horizontal scroll bar */}
       <div
         ref={scrollRef}
@@ -370,11 +501,13 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
 
       <TimelineControls
         microTimelines={microTimelines}
+        timelineItemLabel={timelineItemLabel}
+        clipEditingEnabled={clipEditingEnabled}
         selectedClip={selectedClip}
         onSelectClip={onSelectClip}
         onPlayheadChange={onPlayheadChange}
         onRenameClip={onRenameClip}
-        pendingClipStart={pendingClipStart}
+        pendingClipStart={clipEditingEnabled ? pendingClipStart : null}
         onAddStart={onAddStart}
         onAddEnd={onAddEnd}
         onCancelPending={onCancelPending}
@@ -385,6 +518,8 @@ export const PreviewTimeline: React.FC<PreviewTimelineProps> = ({
         onResetView={resetView}
         followPlayhead={followPlayhead}
         onToggleFollow={() => setFollowPlayhead(f => !f)}
+        showAudioTracks={showAudioTracks}
+        onToggleAudioTracks={onToggleAudioTracks}
         skipGapsEnabled={skipGapsEnabled}
         selectedGapKey={selectedGapKey}
         skipGapDisabled={skipGapDisabled}

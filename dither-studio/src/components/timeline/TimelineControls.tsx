@@ -4,21 +4,25 @@ import { btn, btnPrimary, btnDanger, fmt } from './timelineUtils';
 
 interface Props {
   microTimelines: MicroTimeline[];
+  timelineItemLabel: 'clip' | 'chunk';
+  clipEditingEnabled: boolean;
   selectedClip: MicroTimeline | null;
   onSelectClip: (id: string | null) => void;
   onPlayheadChange: (playhead: number) => void;
-  onRenameClip: (id: string, name: string) => void;
+  onRenameClip?: (id: string, name: string) => void;
   pendingClipStart: number | null;
-  onAddStart: () => void;
-  onAddEnd: () => void;
-  onCancelPending: () => void;
-  onDeleteClip: (id: string) => void;
+  onAddStart?: () => void;
+  onAddEnd?: () => void;
+  onCancelPending?: () => void;
+  onDeleteClip?: (id: string) => void;
   onFocusClip: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onResetView: () => void;
   followPlayhead: boolean;
   onToggleFollow: () => void;
+  showAudioTracks?: boolean;
+  onToggleAudioTracks?: (() => void) | undefined;
   skipGapsEnabled: boolean;
   selectedGapKey: string | null;
   skipGapDisabled: Record<string, true>;
@@ -30,9 +34,10 @@ interface Props {
 }
 
 export const TimelineControls: React.FC<Props> = ({
-  microTimelines, selectedClip, onSelectClip, onPlayheadChange, onRenameClip,
+  microTimelines, timelineItemLabel, clipEditingEnabled, selectedClip, onSelectClip, onPlayheadChange, onRenameClip,
   pendingClipStart, onAddStart, onAddEnd, onCancelPending, onDeleteClip,
   onFocusClip, onZoomIn, onZoomOut, onResetView, followPlayhead, onToggleFollow,
+  showAudioTracks, onToggleAudioTracks,
   skipGapsEnabled, selectedGapKey, skipGapDisabled, skipGapOverrides,
   onToggleGapDisabled, onResetAllSkipGaps,
   outroEnabled, onToggleOutro,
@@ -46,7 +51,7 @@ export const TimelineControls: React.FC<Props> = ({
         <div
           style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2, minHeight: 28 }}
           onClick={() => onSelectClip(null)}
-          title="Click empty space to deselect clip"
+          title={`Click empty space to deselect ${timelineItemLabel}`}
         >
           {microTimelines.map((mt) => {
             const isSel = mt.id === selectedClip?.id;
@@ -54,7 +59,9 @@ export const TimelineControls: React.FC<Props> = ({
               <button
                 key={mt.id}
                 onClick={(e) => { e.stopPropagation(); if (isSel) onPlayheadChange(mt.startSecond); else onSelectClip(mt.id); }}
-                onDoubleClick={() => setEditingName(mt.id)}
+                onDoubleClick={() => {
+                  if (clipEditingEnabled && onRenameClip) setEditingName(mt.id);
+                }}
                 style={{
                   ...btn,
                   background: isSel ? mt.color + '33' : '#1a1a1a',
@@ -73,9 +80,15 @@ export const TimelineControls: React.FC<Props> = ({
                     autoFocus
                     defaultValue={mt.name}
                     onClick={(e) => e.stopPropagation()}
-                    onBlur={(e) => { onRenameClip(mt.id, e.target.value || mt.name); setEditingName(null); }}
+                    onBlur={(e) => {
+                      onRenameClip?.(mt.id, e.target.value || mt.name);
+                      setEditingName(null);
+                    }}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') { onRenameClip(mt.id, (e.target as HTMLInputElement).value || mt.name); setEditingName(null); }
+                      if (e.key === 'Enter') {
+                        onRenameClip?.(mt.id, (e.target as HTMLInputElement).value || mt.name);
+                        setEditingName(null);
+                      }
                       if (e.key === 'Escape') setEditingName(null);
                     }}
                     style={{
@@ -95,24 +108,35 @@ export const TimelineControls: React.FC<Props> = ({
 
       {/* control buttons */}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
-        {pendingClipStart === null ? (
-          <button style={btnPrimary} onClick={onAddStart} title="Mark clip start at the current playhead">+ Start</button>
-        ) : (
+        {clipEditingEnabled && onAddStart && onAddEnd && onCancelPending && (
           <>
-            <button style={{ ...btn, background: '#ffd60a22', borderColor: '#ffd60a', color: '#ffd60a' }} disabled>
-              Start @ {fmt(pendingClipStart)}
-            </button>
-            <button style={btnPrimary} onClick={onAddEnd} title="Mark clip end at the current playhead">+ End</button>
-            <button style={btn} onClick={onCancelPending}>Cancel</button>
+            {pendingClipStart === null ? (
+              <button style={btnPrimary} onClick={onAddStart} title="Mark clip start at the current playhead">+ Start</button>
+            ) : (
+              <>
+                <button style={{ ...btn, background: '#ffd60a22', borderColor: '#ffd60a', color: '#ffd60a' }} disabled>
+                  Start @ {fmt(pendingClipStart)}
+                </button>
+                <button style={btnPrimary} onClick={onAddEnd} title="Mark clip end at the current playhead">+ End</button>
+                <button style={btn} onClick={onCancelPending}>Cancel</button>
+              </>
+            )}
+            <span style={{ width: 1, background: '#333', margin: '0 2px' }} />
           </>
         )}
 
-        <span style={{ width: 1, background: '#333', margin: '0 2px' }} />
-
         {selectedClip && (
           <>
-            <button style={btnPrimary} onClick={onFocusClip} title="Zoom so the selected clip fills ~90% of the timeline">Focus Clip</button>
-            <button style={btnDanger} onClick={() => onDeleteClip(selectedClip.id)} title="Delete the selected clip">Delete</button>
+            <button
+              style={btnPrimary}
+              onClick={onFocusClip}
+              title={`Zoom so the selected ${timelineItemLabel} fills ~90% of the timeline`}
+            >
+              {timelineItemLabel === 'clip' ? 'Focus Clip' : 'Focus Chunk'}
+            </button>
+            {clipEditingEnabled && onDeleteClip && (
+              <button style={btnDanger} onClick={() => onDeleteClip(selectedClip.id)} title="Delete the selected clip">Delete</button>
+            )}
           </>
         )}
 
@@ -131,6 +155,21 @@ export const TimelineControls: React.FC<Props> = ({
         >
           {followPlayhead ? '⏵ Following' : '⏵ Follow'}
         </button>
+
+        {onToggleAudioTracks && (
+          <button
+            style={{
+              ...btn,
+              background: showAudioTracks ? '#8b5cf633' : '#1a1a1a',
+              borderColor: showAudioTracks ? '#8b5cf6' : '#2a2a2a',
+              color: showAudioTracks ? '#fff' : '#aaa',
+            }}
+            onClick={onToggleAudioTracks}
+            title={showAudioTracks ? 'Hide audio tracks' : 'Show audio tracks'}
+          >
+            {showAudioTracks ? 'Hide Audio' : 'Show Audio'}
+          </button>
+        )}
 
         {skipGapsEnabled && selectedGapKey && onToggleGapDisabled && (() => {
           const isDisabled = !!skipGapDisabled[selectedGapKey];
