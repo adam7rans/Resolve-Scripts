@@ -10,6 +10,7 @@ import type {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const API_KEY_PATHS = [
+  path.join(__dirname, '../.assemblyai_key'),
   path.join(__dirname, '../../.assemblyai_key'),
   path.join(__dirname, '../../../.assemblyai_key'),
 ];

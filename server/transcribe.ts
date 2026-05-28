@@ -7,8 +7,6 @@ import {
   submitJob,
   uploadAudio,
 } from './transcribe.api.js';
-import { buildChapters, chapterConfig } from './transcribe.chapters.js';
-import type { CaptionChapter } from './transcribe.types.js';
 export type { TranscribeEvent } from './transcribe.types.js';
 
 const CAPTION_FILE = 'caption.json';
@@ -29,25 +27,12 @@ async function runFromAudioFile(
     onEvent({ type: 'polling', status, message: `Transcribing… (${status})` });
   });
 
-  let chapters: CaptionChapter[] = [];
-  try {
-    chapters = await buildChapters(key, tid, data.text || '', onEvent);
-  } catch (err: any) {
-    onEvent({
-      type: 'chaptering',
-      message: `Chapters unavailable — saving transcript without chapters (${err.message || String(err)})`,
-    });
-  }
-
   // Shape to match CAST's parseTranscript loader.
   const utterances = data.utterances || [];
   const speakers = [...new Set<string>(utterances.map((u) => u.speaker).filter(Boolean) as string[])].sort();
   const outData = {
     speakers,
     text: data.text || '',
-    chapterSource: 'assemblyai-llm-paragraphs',
-    chapterConfig,
-    chapters,
     utterances: utterances.map((u) => ({
       speaker: u.speaker,
       start: u.start || 0,

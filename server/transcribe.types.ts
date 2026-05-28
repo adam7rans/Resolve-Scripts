@@ -5,7 +5,6 @@ export type TranscribeEvent =
   | { type: 'audio_extracted'; message: string }
   | { type: 'uploading'; message: string }
   | { type: 'submitted'; message: string }
-  | { type: 'chaptering'; message: string }
   | { type: 'polling'; status: string; message: string }
   | { type: 'done'; message: string }
   | { type: 'error'; message: string };
@@ -51,14 +50,4 @@ export type AssemblyAIParagraphsResponse = {
   paragraphs?: AssemblyAIParagraph[];
 };
 
-export type ChapterSummary = {
-  headline: string;
-  gist: string;
-  summary: string;
-};
 
-export type CaptionChapter = ChapterSummary & {
-  start: number;
-  end: number;
-  text: string;
-};
