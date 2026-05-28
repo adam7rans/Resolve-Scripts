@@ -1,0 +1,266 @@
+import { splitSentences, type CaptionMode, type TranscriptData, type TranscriptWord } from './transcript';
+import { DEFAULT_CAPTION_STYLE, type CaptionStyle } from './types';
+import { applyAlpha } from './captionColor';
+import { CAPTION_GRACE_MS, captionFadeAlpha, isWordActive, splitWordParts } from '../components/captions.helpers';
+
+function applyCaptionFont(ctx: CanvasRenderingContext2D, size: number, style: CaptionStyle) {
+  ctx.font = `${style.fontWeight} ${size}px ${style.fontFamily}`;
+  (ctx as any).letterSpacing = `${style.letterSpacing}em`;
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round';
+  if (style.shadowEnabled === false) {
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+  } else {
+    ctx.shadowColor = 'rgba(0,0,0,0.7)';
+    ctx.shadowBlur = 14;
+    ctx.shadowOffsetY = 2;
+  }
+}
+
+function measure(ctx: CanvasRenderingContext2D, text: string) {
+  return ctx.measureText(text).width;
+}
+
+function lineStartX(boxLeft: number, boxWidth: number, lineWidth: number, align: CaptionStyle['textAlign']) {
+  if (align === 'right') return boxLeft + boxWidth - lineWidth;
+  if (align === 'center') return boxLeft + (boxWidth - lineWidth) / 2;
+  return boxLeft;
+}
+
+function wrapTokens(
+  ctx: CanvasRenderingContext2D,
+  tokens: Array<{ text: string; active?: boolean; progress?: number }>,
+  maxWidth: number,
+) {
+  const lines: Array<typeof tokens> = [];
+  let line: typeof tokens = [];
+  let lineWidth = 0;
+
+  for (const token of tokens) {
+    const tokenWidth = measure(ctx, token.text);
+    if (line.length && lineWidth + tokenWidth > maxWidth) {
+      lines.push(line);
+      line = [];
+      lineWidth = 0;
+    }
+    line.push(token);
+    lineWidth += tokenWidth;
+  }
+  if (line.length) lines.push(line);
+  return lines;
+}
+
+function activeUtteranceAt(data: TranscriptData, timeMs: number) {
+  return data.utterances.find((u, i) => {
+    const next = data.utterances[i + 1]?.start ?? Number.POSITIVE_INFINITY;
+    return timeMs >= u.start && timeMs < next;
+  }) ?? null;
+}
+
+function activeWordAt(data: TranscriptData, timeMs: number, playbackStartMs: number | undefined) {
+  const utterance = activeUtteranceAt(data, timeMs);
+  if (!utterance?.words) return null;
+  const exact = utterance.words.find((w) => isWordActive(w, timeMs));
+  if (exact) return exact;
+  const previous = [...utterance.words].reverse().find((w) => timeMs >= (w.start ?? 0));
+  if (!previous) return null;
+  const utteranceEnd = utterance.end ?? previous.end ?? previous.start ?? 0;
+  if (timeMs > utteranceEnd + CAPTION_GRACE_MS) return null;
+  if (captionFadeAlpha(timeMs, utteranceEnd, playbackStartMs) <= 0) return null;
+  return previous;
+}
+
+function activeSentenceAt(data: TranscriptData, timeMs: number, style: CaptionStyle, playbackStartMs: number | undefined) {
+  const sentences = splitSentences(data, {
+    mode: style.lineSplitMode ?? 'sentence',
+    maxWords: style.lineMaxWords,
+    maxChars: style.lineMaxChars,
+    maxSeconds: style.lineMaxSeconds,
+    targetWords: style.lineTargetWords,
+  });
+  return sentences.find((s, i) => {
+    const next = sentences[i + 1]?.start ?? Number.POSITIVE_INFINITY;
+    const deadline = Math.min(next, s.end + CAPTION_GRACE_MS);
+    return timeMs >= s.start && timeMs < deadline;
+  }) ?? null;
+}
+
+export function drawCaptionsToCanvas(
+  ctx: CanvasRenderingContext2D,
+  transcript: TranscriptData,
+  mode: CaptionMode,
+  timeMs: number,
+  width: number,
+  height: number,
+  inputStyle: CaptionStyle,
+  scale = 1.0, // Scale factor: exportWidth / previewWidth
+  playbackStartMs?: number,
+) {
+  const style = { ...DEFAULT_CAPTION_STYLE, ...inputStyle };
+  const activeColor = applyAlpha(style.color, style.colorOpacity ?? 1);
+  const dimColor = applyAlpha(style.dimColor, style.dimColorOpacity ?? 1);
+  const shadowOn = style.shadowEnabled !== false;
+  const wordBoxWidth = width * 0.92;
+  const lineBoxFraction = Math.max(0.01, Math.min(1, (style.lineMaxWidth ?? 92) / 100));
+  const lineBoxWidth = width * lineBoxFraction;
+  const centerY = (height * style.verticalPosition) / 100;
+
+  const lineFontSize = style.lineFontSize * scale;
+  const wordFontSize = style.wordFontSize * scale;
+
+  ctx.save();
+  ctx.textAlign = 'left';
+
+  if (mode === 'word') {
+    const wordObj = activeWordAt(transcript, timeMs, playbackStartMs);
+    const word = wordObj?.text ?? '';
+    if (!word) {
+      ctx.restore();
+      return;
+    }
+    const utterance = activeUtteranceAt(transcript, timeMs);
+    const utteranceEnd = utterance?.end ?? wordObj?.end ?? wordObj?.start ?? 0;
+    const wordAlpha = captionFadeAlpha(timeMs, utteranceEnd, playbackStartMs);
+    if (wordAlpha <= 0) {
+      ctx.restore();
+      return;
+    }
+    applyCaptionFont(ctx, wordFontSize, style);
+    if (shadowOn) {
+      ctx.shadowBlur = 14 * scale;
+      ctx.shadowOffsetY = 2 * scale;
+    }
+    const wordWidth = measure(ctx, word);
+    const wordBoxLeft = ((width - wordBoxWidth) * style.horizontalPosition) / 100;
+    const x = lineStartX(wordBoxLeft, wordBoxWidth, wordWidth, style.textAlign);
+    ctx.fillStyle = activeColor;
+    ctx.globalAlpha = wordAlpha;
+    ctx.fillText(word, x, centerY + wordFontSize / 3);
+    ctx.restore();
+    return;
+  }
+
+  const sentence = activeSentenceAt(transcript, timeMs, style, playbackStartMs);
+  if (!sentence) {
+    ctx.restore();
+    return;
+  }
+
+  const sentenceAlpha = captionFadeAlpha(timeMs, sentence.end, playbackStartMs);
+  if (sentenceAlpha <= 0) {
+    ctx.restore();
+    return;
+  }
+
+  applyCaptionFont(ctx, lineFontSize, style);
+  if (shadowOn) {
+    ctx.shadowBlur = 12 * scale;
+    ctx.shadowOffsetY = 2 * scale;
+  }
+  ctx.globalAlpha = sentenceAlpha;
+  const boxWidth = lineBoxWidth;
+  const boxLeft = ((width - lineBoxWidth) * style.horizontalPosition) / 100;
+  // Underline fade window (ms). 0 → instant on/off, matches the React preview.
+  const FADE_MS = Math.max(0, style.underlineFadeMs ?? 150);
+  const tokens = sentence.words?.length
+    ? sentence.words.map((w) => {
+        const active = isWordActive(w, timeMs);
+        const start = w.start ?? 0;
+        const end = w.end ?? start;
+        const duration = Math.max(end - start, 1);
+        const elapsed = active ? Math.min(Math.max(timeMs - start, 0), duration) : 0;
+        const remaining = active ? Math.max(end - timeMs, 0) : 0;
+        const fadeAlpha = active
+          ? FADE_MS === 0
+            ? 1
+            : Math.max(0, Math.min(1, Math.min(elapsed, remaining) / FADE_MS))
+          : 0;
+        return {
+          text: `${w.text} `,
+          word: w.text,
+          active,
+          progress: active ? elapsed / duration : 0,
+          fadeAlpha,
+        };
+      })
+    : sentence.text.split(/\s+/).filter(Boolean).map((text) => ({ text: `${text} `, word: text }));
+
+  const lines = wrapTokens(ctx, tokens, boxWidth);
+  const lineHeightPx = lineFontSize * style.lineHeight;
+  const totalHeight = Math.max(lineFontSize, lines.length * lineHeightPx);
+  let y = centerY - totalHeight / 2 + lineFontSize;
+
+  // Underline mode with legacy boolean fallback.
+  const underlineMode: 'off' | 'draw' | 'fade' =
+    style.underlineMode ?? (style.underlineEnabled === false ? 'off' : 'draw');
+
+  for (const line of lines) {
+    const lineWidth = line.reduce((sum, token) => sum + measure(ctx, token.text), 0);
+    let x = lineStartX(boxLeft, boxWidth, lineWidth, style.textAlign);
+    for (const token of line) {
+      const tokenWidth = measure(ctx, token.text);
+      // Render lead/body/trail separately so punctuation never receives the
+      // active highlight colour. The body is the real word; lead/trail keep
+      // the dim colour even when the token is "active".
+      const word = (token as any).word ?? token.text.trimEnd();
+      const { lead, body, trail } = splitWordParts(word);
+      const trailingSpace = token.text.endsWith(' ') ? ' ' : '';
+      const dim = style.wordHighlightEnabled ? dimColor : activeColor;
+      const active = style.wordHighlightEnabled
+        ? (token.active ? activeColor : dimColor)
+        : activeColor;
+
+      const leadW = lead ? measure(ctx, lead) : 0;
+      const bodyW = body ? measure(ctx, body) : 0;
+      const trailW = trail ? measure(ctx, trail) : 0;
+
+      let cx = x;
+      if (lead) {
+        ctx.fillStyle = dim;
+        ctx.fillText(lead, cx, y);
+        cx += leadW;
+      }
+      if (body) {
+        ctx.fillStyle = active;
+        ctx.fillText(body, cx, y);
+      }
+      const bodyX = cx;
+      cx += bodyW;
+      if (trail) {
+        ctx.fillStyle = dim;
+        ctx.fillText(trail, cx, y);
+        cx += trailW;
+      }
+      // Re-emit the token's trailing space (if any) using the dim colour so
+      // word spacing matches what wrapTokens measured.
+      if (trailingSpace) {
+        ctx.fillStyle = dim;
+        ctx.fillText(trailingSpace, cx, y);
+      }
+
+      if (token.active && underlineMode !== 'off' && body) {
+        // Underline ONLY the body (no leading/trailing punctuation, no space).
+        const barWidth =
+          underlineMode === 'draw'
+            ? bodyW * (token.progress ?? 0)
+            : bodyW;
+        const alpha =
+          underlineMode === 'fade' ? ((token as any).fadeAlpha ?? 0) : 1;
+        if (barWidth > 0 && alpha > 0) {
+          ctx.save();
+          ctx.shadowColor = 'transparent';
+          ctx.globalAlpha = alpha * sentenceAlpha;
+          ctx.fillStyle = activeColor;
+          ctx.fillRect(bodyX, y + (5 * scale), barWidth, 2 * scale);
+          ctx.restore();
+        }
+      }
+      x += tokenWidth;
+    }
+    y += lineHeightPx;
+  }
+
+  ctx.restore();
+}

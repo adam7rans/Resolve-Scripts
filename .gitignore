@@ -3,22 +3,33 @@
 .env.*
 node_modules/
 dist/
-dither-studio/node_modules/
-dither-studio/dist/
-dither-studio/server.log
-dither-studio/*errors.txt
 __pycache__/
 *.pyc
 .DS_Store
 
-# Projects & Media
-projects/
+# Local app data
+/projects/
+/server.log
+/*errors.txt
+/build/
+/launcher/build/
+/audio/
+
+# Media / transcript outputs
 *.mp4
 *.mov
 *.m4a
 *.wav
 *.aac
 *.mp3
+*.ogg
+*.flac
+*.webm
+*.avi
+*.mkv
+*.srt
+*.vtt
 *.transcript.json
 transcript.json
 caption.json
+/exports/

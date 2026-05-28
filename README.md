@@ -1,32 +1,80 @@
-# DaVinci Resolve Chapter Script Instructions
+# CAST
 
-This script automates the creation of chapter titles in DaVinci Resolve.
+CAST is a local-first web app for shaping long-form spoken video into stylized clips and exports.
 
-## How to Install
+It combines:
 
-1.  Open DaVinci Resolve.
-2.  Go to the **Console** (Workspace -> Console) and click the **Py3** icon to ensure Python 3 is working.
-3.  Place the `create_chapters.py` file in the Resolve script directory:
-    -   **macOS**: `/Users/adam/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Comp/`
-    -   *Or* simply run it via the Console (Script -> Run Script...).
+- transcript-driven clip finding and caption editing
+- manual skip editing for long-form cleanup
+- shader, gradient, dither, and de-rez visual treatment
+- layered music arrangement with fades and cross-track timing
+- local rendering and export with project data stored on your machine
 
-## How to Use
+## Run CAST
 
-1.  Open your project and the timeline you want to add chapters to.
-2.  Go to `Workspace -> Scripts -> create_chapters`.
-3.  The script will:
-    -   Create a new video track.
-    -   Add `Text+` clips at the specified timestamps.
-    -   Set the text to the chapter title.
-    -   Position the text below the center (matching your layout).
+Development:
 
-## Customizing Chapters
-
-To change the chapters, simply edit the `CHAPTER_DATA` variable inside `create_chapters.py` with your new timestamps and titles.
-
-```python
-CHAPTERS_DATA = """
-00:00 — Chapter 1: Your Title
-01:45 — Chapter 2: Another Title
-"""
+```bash
+cd "/Users/adam/Documents/CAST"
+npm install
+npm run dev
 ```
+
+Open [http://127.0.0.1:5180](http://127.0.0.1:5180).
+
+Single-origin local app mode:
+
+```bash
+npm run build
+npm run start:app
+```
+
+Open [http://127.0.0.1:4312](http://127.0.0.1:4312) by default.
+
+## Projects and presets
+
+By default, CAST stores local working data here:
+
+- `projects/` — imported media, transcripts, exports, per-project settings
+- `presets/` — tracked shareable look presets
+
+You can override those roots with:
+
+- `CAST_DATA_DIR`
+- `CAST_PRESETS_DIR`
+
+## Dock launcher
+
+Build the macOS launcher bundle:
+
+```bash
+npm run build:launcher
+```
+
+Install it into `~/Applications`:
+
+```bash
+npm run install:launcher
+```
+
+That generates `CAST.app`, which you can pin to the Dock and use to start the local app directly.
+
+## Privacy
+
+This repo is configured so local project data stays untracked:
+
+- `projects/`
+- media imports
+- transcript/caption outputs
+- export artifacts
+- local logs
+
+Only code and tracked presets should be committed.
+
+## Legacy Resolve scripts
+
+The original Resolve-era scripts are preserved under:
+
+`legacy/resolve-scripts/`
+
+They are kept for reference only and are no longer part of the active CAST product surface.
