@@ -45,6 +45,7 @@ export const SidebarContent: React.FC<SidebarPanelProps> = (p) => (
         audioInfo={p.audioInfo}
         audioMode={p.audioMode}
         onPickFile={p.onPickFile}
+        onDrop={p.onDrop}
         onImportNativeMedia={p.onImportNativeMedia}
       />
     )}

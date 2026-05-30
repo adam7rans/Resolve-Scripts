@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   DEFAULT_VIDEO, DEFAULT_VIDEO_GRADIENT, DEFAULT_VIDEO_LEVELS, DEFAULT_VIDEO_TONE,
   DEFAULT_VIDEO_COLOR, DEFAULT_VIDEO_DISTORTION, DEFAULT_VIDEO_DITHER, DEFAULT_VIDEO_REZ,
@@ -13,6 +13,36 @@ import {
 import { TabBar } from '../Tabs';
 import type { VideoShaderSubTab, VideoSubTab } from '../../lib/constants';
 
+const MediaDropZone: React.FC<{
+  onDrop: React.DragEventHandler<HTMLDivElement>;
+  onPickFile: React.ChangeEventHandler<HTMLInputElement>;
+}> = ({ onDrop, onPickFile }) => {
+  const [over, setOver] = useState(false);
+  return (
+    <label
+      onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => { setOver(false); onDrop(e as any); }}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '28px 16px',
+        border: `2px dashed ${over ? '#1f6feb' : '#444'}`,
+        borderRadius: 6,
+        background: over ? 'rgba(31,111,235,0.08)' : 'transparent',
+        color: over ? '#6ab0ff' : '#666',
+        cursor: 'pointer',
+        transition: 'border-color 150ms, background 150ms, color 150ms',
+        fontFamily: 'inherit',
+        fontSize: 13,
+        textAlign: 'center',
+      }}
+    >
+      Drop video or audio here
+      <input type="file" accept="video/*,audio/*" onChange={onPickFile} style={{ display: 'none' }} />
+    </label>
+  );
+};
+
 interface Props {
   vid: VideoShaderParams;
   setVid: React.Dispatch<React.SetStateAction<VideoShaderParams>>;
@@ -26,37 +56,27 @@ interface Props {
   audioInfo: { name: string; duration: number } | null;
   audioMode: boolean;
   onPickFile: React.ChangeEventHandler<HTMLInputElement>;
+  onDrop: React.DragEventHandler<HTMLDivElement>;
   onImportNativeMedia: () => void;
 }
 
 export const VideoPanel: React.FC<Props> = ({
-  vid, setVid, videoSubTab, setVideoSubTab, videoShaderSubTab, setVideoShaderSubTab, invertFinalOutput, setInvertFinalOutput, videoInfo, audioInfo, audioMode, onPickFile, onImportNativeMedia,
+  vid, setVid, videoSubTab, setVideoSubTab, videoShaderSubTab, setVideoShaderSubTab, invertFinalOutput, setInvertFinalOutput, videoInfo, audioInfo, audioMode, onPickFile, onDrop, onImportNativeMedia,
 }) => (
   <>
     {!videoInfo && !audioInfo ? (
       <Section title="Import media">
-        <div style={{ color: '#aaa', marginBottom: 8 }}>
-          Move a video <em>or audio</em> file into this project. Audio files skip the visible
-          video layer and unlock the audio-reactive Figure tab. You can still drop a file
-          onto the preview if you want to copy it instead.
-        </div>
+        <MediaDropZone onDrop={onDrop} onPickFile={onPickFile} />
         <button
           onClick={onImportNativeMedia}
           style={{
-            display: 'inline-block', padding: '8px 14px', background: '#1f6feb',
+            display: 'block', width: '100%', padding: '10px 14px', background: '#1f6feb',
             color: '#fff', borderRadius: 3, cursor: 'pointer', border: 'none',
-            fontFamily: 'inherit',
+            fontFamily: 'inherit', marginTop: 8,
           }}
         >
-          Move video or audio into project…
+          Add video or audio…
         </button>
-        <label style={{
-          display: 'inline-block', marginLeft: 8, padding: '8px 14px', background: '#222',
-          color: '#ddd', borderRadius: 3, cursor: 'pointer',
-        }}>
-          Copy via browser…
-          <input type="file" accept="video/*,audio/*" onChange={onPickFile} style={{ display: 'none' }} />
-        </label>
       </Section>
     ) : (
       <>

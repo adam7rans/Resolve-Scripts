@@ -64,9 +64,17 @@ export function resetProjectState(setters: ProjectHandlerSetters) {
   setters.setSelectedClipId(null);
   setters.setSelectedFullSegmentId(null);
   setters.setPendingClipStart(null);
+  setters.setCustomCuts([]);
+  setters.setJumpCutsEnabled(false);
+  setters.setJumpCutGapMs(300);
+  setters.setJumpCutPaddingMs(0);
+  setters.setCustomCutPaddingMs(0);
   setters.setJumpCutGapOverrides({});
   setters.setJumpCutGapDisabled({});
   setters.setSelectedGapKey(null);
+  setters.setShowSilenceGaps(false);
+  setters.setShowFillerCuts(false);
+  setters.setShowManualCuts(false);
 }
 
 export function applyProjectVisualState(proj: ProjectData, setters: ProjectHandlerSetters) {

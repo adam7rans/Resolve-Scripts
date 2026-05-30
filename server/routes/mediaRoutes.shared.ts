@@ -66,31 +66,37 @@ export function finalizeVideoImport(
   file: ImportedMediaFile,
   res: Response,
 ) {
-  cleanupReplacedMedia(id, [project.videoFile, project.audioFile], file.filename);
+  try {
+    cleanupReplacedMedia(id, [project.videoFile, project.audioFile], file.filename);
 
-  project.videoFile = file.filename;
-  project.originalVideoName = file.originalname;
-  project.mediaType = 'video';
-  project.importedAt = new Date().toISOString();
-  project.updatedAt = project.importedAt;
-  delete project.audioFile;
-  delete project.originalAudioName;
-  delete project.transcriptFile;
-  delete project.captionFile;
-  writeProject(id, project);
-  emit(id, { type: 'video_saved', message: 'Video imported into project folder' });
+    project.videoFile = file.filename;
+    project.originalVideoName = file.originalname;
+    project.mediaType = 'video';
+    project.importedAt = new Date().toISOString();
+    project.updatedAt = project.importedAt;
+    delete project.audioFile;
+    delete project.originalAudioName;
+    delete project.transcriptFile;
+    delete project.captionFile;
+    writeProject(id, project);
+    emit(id, { type: 'video_saved', message: 'Video imported into project folder' });
 
-  runTranscriptionPipeline(file.path, projectDir(id), (event) => {
-    emit(id, event);
-    if (event.type === 'done') updateTranscriptionReady(id);
-  });
+    runTranscriptionPipeline(file.path, projectDir(id), (event) => {
+      emit(id, event);
+      if (event.type === 'done') updateTranscriptionReady(id);
+    });
 
-  res.json({
-    ok: true,
-    mediaType: 'video',
-    filename: file.filename,
-    originalName: file.originalname,
-  });
+    res.json({
+      ok: true,
+      mediaType: 'video',
+      filename: file.filename,
+      originalName: file.originalname,
+    });
+  } catch (err) {
+    console.error(`[media] finalizeVideoImport failed for project ${id}:`, err);
+    const message = err instanceof Error ? err.message : 'Video import failed';
+    res.status(500).json({ error: message });
+  }
 }
 
 export function finalizeAudioImport(
@@ -99,31 +105,37 @@ export function finalizeAudioImport(
   file: ImportedMediaFile,
   res: Response,
 ) {
-  cleanupReplacedMedia(id, [project.videoFile, project.audioFile], file.filename);
+  try {
+    cleanupReplacedMedia(id, [project.videoFile, project.audioFile], file.filename);
 
-  project.audioFile = file.filename;
-  project.originalAudioName = file.originalname;
-  project.mediaType = 'audio';
-  project.importedAt = new Date().toISOString();
-  project.updatedAt = project.importedAt;
-  delete project.videoFile;
-  delete project.originalVideoName;
-  delete project.transcriptFile;
-  delete project.captionFile;
-  writeProject(id, project);
-  emit(id, { type: 'video_saved', message: 'Audio imported into project folder' });
+    project.audioFile = file.filename;
+    project.originalAudioName = file.originalname;
+    project.mediaType = 'audio';
+    project.importedAt = new Date().toISOString();
+    project.updatedAt = project.importedAt;
+    delete project.videoFile;
+    delete project.originalVideoName;
+    delete project.transcriptFile;
+    delete project.captionFile;
+    writeProject(id, project);
+    emit(id, { type: 'video_saved', message: 'Audio imported into project folder' });
 
-  runAudioTranscriptionPipeline(file.path, projectDir(id), (event) => {
-    emit(id, event);
-    if (event.type === 'done') updateTranscriptionReady(id);
-  });
+    runAudioTranscriptionPipeline(file.path, projectDir(id), (event) => {
+      emit(id, event);
+      if (event.type === 'done') updateTranscriptionReady(id);
+    });
 
-  res.json({
-    ok: true,
-    mediaType: 'audio',
-    filename: file.filename,
-    originalName: file.originalname,
-  });
+    res.json({
+      ok: true,
+      mediaType: 'audio',
+      filename: file.filename,
+      originalName: file.originalname,
+    });
+  } catch (err) {
+    console.error(`[media] finalizeAudioImport failed for project ${id}:`, err);
+    const message = err instanceof Error ? err.message : 'Audio import failed';
+    res.status(500).json({ error: message });
+  }
 }
 
 export function isAudioPath(filePath: string): boolean {

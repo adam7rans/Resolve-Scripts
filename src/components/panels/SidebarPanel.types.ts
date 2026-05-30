@@ -115,6 +115,7 @@ export interface SidebarPanelProps {
   invertFinalOutput: boolean;
   setInvertFinalOutput: (value: boolean) => void;
   onPickFile: React.ChangeEventHandler<HTMLInputElement>;
+  onDrop: React.DragEventHandler<HTMLDivElement>;
   onImportNativeMedia: () => void;
   captionsSubTab: CaptionsSubTab;
   setCaptionsSubTab: React.Dispatch<React.SetStateAction<CaptionsSubTab>>;

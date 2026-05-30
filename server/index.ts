@@ -26,6 +26,16 @@ if (serveStaticApp && fs.existsSync(DIST_DIR)) {
   });
 }
 
+// Global error handler — returns JSON instead of Express's default HTML error page.
+// Must be registered after all routes.
+app.use(((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) return next(err);
+  const status = err.status || err.statusCode || 500;
+  const message = err.message || 'Internal server error';
+  console.error(`[error] ${status} — ${message}`);
+  res.status(status).json({ error: message });
+}) as express.ErrorRequestHandler);
+
 app.listen(APP_PORT, APP_HOST, () => {
   const baseUrl = `http://${APP_HOST}:${APP_PORT}`;
   console.log(`${APP_NAME} ${serveStaticApp ? 'app' : 'API'} -> ${baseUrl}`);
