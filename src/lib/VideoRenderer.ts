@@ -122,6 +122,7 @@ export class VideoRenderer {
     u.uPositionX.value = p.positionX;
     u.uPositionY.value = p.positionY;
     u.uPositionRotation.value = p.positionRotation;
+    u.uPositionScale.value = p.positionScale;
     u.uRotation.value = p.rotation;
     u.uScale.value = p.scale;
     u.uDistortionFrequency.value = p.distortionFrequency;

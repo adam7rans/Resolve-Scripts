@@ -155,6 +155,7 @@ export const VideoPositionSection: React.FC<{ value: VideoShaderParams; onChange
         min={0} max={360} step={0.5}
         onChange={(v) => set({ positionRotation: v * RAD_PER_DEG })}
       />
+      <Slider label="scale" value={value.positionScale} min={0.1} max={3} step={0.01} onChange={(v) => set({ positionScale: v })} />
     </Section>
   );
 };

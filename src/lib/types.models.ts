@@ -56,6 +56,7 @@ export interface VideoShaderParams {
   positionX: number;
   positionY: number;
   positionRotation: number;
+  positionScale: number;
   rotation: number;
   scale: number;
   distortionFrequency: number;

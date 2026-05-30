@@ -175,7 +175,7 @@ export const App: React.FC = () => {
   useAutoSave(activeProjectId, {
     bg, bgDither, vid, audioReactivity, music, musicLibraryDurations: musicAssetDurations, musicTimelineClips, limiter, captionMode, captionStyle, captionShader,
     bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport,
-    microTimelines, selectedClipId, customCuts, jumpCutGapOverrides, jumpCutGapDisabled, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
+    microTimelines, selectedClipId, captionClipEdits, customCuts, jumpCutGapOverrides, jumpCutGapDisabled, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
     showSilenceGaps, showFillerCuts, showManualCuts, mainTab, bgSubTab, videoSubTab, audioSubTab, captionsSubTab, editorSubTab, editorMode, selectedFullSegmentId,
     showAudioTracks, muted, mediaVolume, outroVolume, videoShaderSubTab, projectHasVideo: !!projects.find((p) => p.id === activeProjectId)?.hasVideo,
     projectHasAudio: !!projects.find((p) => p.id === activeProjectId)?.hasAudio, videoInfoLoaded: !!videoInfo, audioInfoLoaded: !!audioInfo,

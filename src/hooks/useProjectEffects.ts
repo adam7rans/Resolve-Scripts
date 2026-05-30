@@ -1,6 +1,6 @@
 import type React from 'react';
-import { useEffect, useRef } from 'react';
-import { parseTranscript, type CaptionMode, type TranscriptData } from '../lib/transcript';
+import { useCallback, useEffect, useRef } from 'react';
+import { parseTranscript, type CaptionMode, type ClipCaptionEdits, type TranscriptData } from '../lib/transcript';
 import {
   listProjects, saveSettings, getTranscript, openEventStream,
   type ProjectMeta,
@@ -103,6 +103,7 @@ export interface AutoSaveSettings {
   vidExport: ExportParams;
   microTimelines: MicroTimeline[];
   selectedClipId: string | null;
+  captionClipEdits: Record<string, ClipCaptionEdits>;
   customCuts: CustomCut[];
   jumpCutGapOverrides: Record<string, { startMs: number; endMs: number }>;
   jumpCutGapDisabled: Record<string, true>;
@@ -132,20 +133,78 @@ export interface AutoSaveSettings {
   audioInfoLoaded: boolean;
 }
 
-/** Auto-save project settings whenever they change. */
-export function useAutoSave(activeProjectId: string | null, settings: AutoSaveSettings) {
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+/** Build the settings payload to persist. */
+function buildSavePayload(settings: AutoSaveSettings) {
   const {
     bg, bgDither, vid, audioReactivity, music, musicLibraryDurations, musicTimelineClips, limiter,
     captionMode, captionStyle, captionShader,
     bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn,
     activeGuide, cropToGuide, bgExport, vidExport,
-    microTimelines, selectedClipId,
+    microTimelines, selectedClipId, captionClipEdits,
+    customCuts, jumpCutGapOverrides, jumpCutGapDisabled, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
+    showSilenceGaps, showFillerCuts, showManualCuts,
+    mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, editorSubTab, editorMode, selectedFullSegmentId, showAudioTracks, muted, mediaVolume, outroVolume,
+  } = settings;
+  return {
+    background: bg, backgroundDither: bgDither, video: vid,
+    audioReactivity, music, musicLibraryDurations, musicTimelineClips, limiter,
+    captionMode, captionStyle, captionShader,
+    layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn, music: musicLayerOn, bgOffMode, bgOffColor },
+    activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
+    microTimelines, selectedClipId, captionClipEdits,
+    jumpCuts: {
+      enabled: jumpCutsEnabled,
+      gapMs: jumpCutGapMs,
+      paddingMs: jumpCutPaddingMs,
+      customPaddingMs: customCutPaddingMs,
+      showSilence: showSilenceGaps,
+      showFiller: showFillerCuts,
+      showManual: showManualCuts,
+      overrides: jumpCutGapOverrides,
+      disabled: jumpCutGapDisabled,
+    },
+    customCuts,
+    ui: { mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, editorSubTab, editorMode, selectedFullSegmentId, showAudioTracks, muted, mediaVolume, outroVolume },
+  };
+}
+
+/** Auto-save project settings whenever they change. */
+export function useAutoSave(activeProjectId: string | null, settings: AutoSaveSettings) {
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Keep a ref to the latest payload so the beforeunload handler can flush it.
+  const pendingPayloadRef = useRef<{ projectId: string; payload: Record<string, any> } | null>(null);
+  const {
+    bg, bgDither, vid, audioReactivity, music, musicLibraryDurations, musicTimelineClips, limiter,
+    captionMode, captionStyle, captionShader,
+    bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn,
+    activeGuide, cropToGuide, bgExport, vidExport,
+    microTimelines, selectedClipId, captionClipEdits,
     customCuts, jumpCutGapOverrides, jumpCutGapDisabled, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs,
     showSilenceGaps, showFillerCuts, showManualCuts,
     mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, editorSubTab, editorMode, selectedFullSegmentId, showAudioTracks, muted, mediaVolume, outroVolume,
     projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded,
   } = settings;
+
+  const flushPending = useCallback(() => {
+    const pending = pendingPayloadRef.current;
+    if (!pending) return;
+    if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
+    pendingPayloadRef.current = null;
+    // Use sendBeacon so the save survives page unload.
+    const url = `/api/projects/${encodeURIComponent(pending.projectId)}/settings`;
+    navigator.sendBeacon(url, new Blob([JSON.stringify(pending.payload)], { type: 'application/json' }));
+  }, []);
+
+  // Flush pending saves on page close / refresh / navigate away.
+  useEffect(() => {
+    const handler = () => flushPending();
+    window.addEventListener('beforeunload', handler);
+    window.addEventListener('pagehide', handler);
+    return () => {
+      window.removeEventListener('beforeunload', handler);
+      window.removeEventListener('pagehide', handler);
+    };
+  }, [flushPending]);
 
   useEffect(() => {
     if (!activeProjectId) return;
@@ -155,30 +214,17 @@ export function useAutoSave(activeProjectId: string | null, settings: AutoSaveSe
     if (projectHasVideo && !videoInfoLoaded) return;
     if (projectHasAudio && !projectHasVideo && !audioInfoLoaded) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    const payload = buildSavePayload(settings);
+    pendingPayloadRef.current = { projectId: activeProjectId, payload };
     saveTimerRef.current = setTimeout(() => {
-      saveSettings(activeProjectId, {
-        background: bg, backgroundDither: bgDither, video: vid,
-        audioReactivity, music, musicLibraryDurations, musicTimelineClips, limiter,
-        captionMode, captionStyle, captionShader,
-        layers: { background: bgLayerOn, video: videoLayerOn, captions: captionsLayerOn, music: musicLayerOn, bgOffMode, bgOffColor },
-        activeGuide, cropToGuide, exportBackground: bgExport, exportVideo: vidExport,
-        microTimelines, selectedClipId,
-        jumpCuts: {
-          enabled: jumpCutsEnabled,
-          gapMs: jumpCutGapMs,
-          paddingMs: jumpCutPaddingMs,
-          customPaddingMs: customCutPaddingMs,
-          showSilence: showSilenceGaps,
-          showFiller: showFillerCuts,
-          showManual: showManualCuts,
-          overrides: jumpCutGapOverrides,
-          disabled: jumpCutGapDisabled,
-        },
-        customCuts,
-        ui: { mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, editorSubTab, editorMode, selectedFullSegmentId, showAudioTracks, muted, mediaVolume, outroVolume },
-      }).catch(() => { });
+      pendingPayloadRef.current = null;
+      saveTimerRef.current = null;
+      saveSettings(activeProjectId, payload).catch(() => { });
     }, 800);
-  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, musicLibraryDurations, musicTimelineClips, limiter, captionMode, captionStyle, captionShader, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, microTimelines, selectedClipId, customCuts, jumpCutGapOverrides, jumpCutGapDisabled, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs, showSilenceGaps, showFillerCuts, showManualCuts, mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, editorSubTab, editorMode, selectedFullSegmentId, showAudioTracks, muted, mediaVolume, outroVolume, projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded]);
+    return () => {
+      if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
+    };
+  }, [activeProjectId, bg, bgDither, vid, audioReactivity, music, musicLibraryDurations, musicTimelineClips, limiter, captionMode, captionStyle, captionShader, bgLayerOn, bgOffMode, bgOffColor, videoLayerOn, captionsLayerOn, musicLayerOn, activeGuide, cropToGuide, bgExport, vidExport, microTimelines, selectedClipId, captionClipEdits, customCuts, jumpCutGapOverrides, jumpCutGapDisabled, jumpCutsEnabled, jumpCutGapMs, jumpCutPaddingMs, customCutPaddingMs, showSilenceGaps, showFillerCuts, showManualCuts, mainTab, bgSubTab, videoSubTab, videoShaderSubTab, audioSubTab, captionsSubTab, editorSubTab, editorMode, selectedFullSegmentId, showAudioTracks, muted, mediaVolume, outroVolume, projectHasVideo, projectHasAudio, videoInfoLoaded, audioInfoLoaded]);
 }
 
 /**

@@ -64,6 +64,7 @@ uniform float uDistortionAngle; // Angle of distortion in radians
 uniform float uPositionX;
 uniform float uPositionY;
 uniform float uPositionRotation;
+uniform float uPositionScale;
 uniform float uRotation;
 uniform float uScale;
 uniform vec2 uUvScale;
@@ -257,6 +258,9 @@ void main() {
   float cosPR = cos(uPositionRotation);
   float sinPR = sin(uPositionRotation);
   centeredUv = mat2(cosPR, -sinPR, sinPR, cosPR) * centeredUv;
+
+  // Apply position scale (zoom: <1 zooms in, >1 zooms out)
+  centeredUv *= uPositionScale;
 
   // Apply distortion rotation
   float cosR = cos(uRotation);
@@ -512,6 +516,7 @@ export const dancingVideoShaderUniforms = {
   uPositionX: { value: 0.0 },
   uPositionY: { value: 0.0 },
   uPositionRotation: { value: 0.0 },
+  uPositionScale: { value: 1.0 },
   uRotation: { value: 0.0 },
   uScale: { value: 1.0 },
   uUvScale: { value: { x: 1.0, y: 1.0 } }

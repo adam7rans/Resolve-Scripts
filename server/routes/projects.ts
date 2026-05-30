@@ -62,7 +62,10 @@ projectRoutes.get('/:id', (req, res) => {
 });
 
 // Save UI/shader/export settings (debounced from frontend)
-projectRoutes.put('/:id/settings', (req, res) => {
+// Accept both PUT (normal auto-save) and POST (sendBeacon on page close).
+projectRoutes.post('/:id/settings', settingsHandler);
+projectRoutes.put('/:id/settings', settingsHandler);
+function settingsHandler(req: import('express').Request, res: import('express').Response) {
   const id = req.params.id as string;
   const proj = readProject(id);
   if (!proj) {
@@ -72,7 +75,7 @@ projectRoutes.put('/:id/settings', (req, res) => {
   writeSettings(id, { ...readSettings(id, proj), ...(req.body as any) });
   writeProject(id, { ...proj, updatedAt: new Date().toISOString() });
   res.json({ ok: true });
-});
+}
 
 // Get transcript JSON
 projectRoutes.get('/:id/transcript', (req, res) => {

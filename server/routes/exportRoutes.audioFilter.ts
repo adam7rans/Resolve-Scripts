@@ -31,7 +31,7 @@ export function buildAudioFilter({
   const sc = effectiveMusic?.sidechain;
   const scEnabled = sc?.enabled !== false;
   const threshold = sc?.threshold ?? 0.1;
-  const ratio = 1.0 / (1.0 - (sc?.amount ?? 0.5));
+  const ratio = Math.min(20, Math.max(1, 1.0 / (1.0 - (sc?.amount ?? 0.5))));
   const attack = sc?.attackMs ?? 80;
   const release = sc?.releaseMs ?? 350;
   const hasMainSpeech = audioSources.some((src, index) => index === 0 && !src.isOutro);
