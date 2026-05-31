@@ -58,7 +58,10 @@ export const ProjectBar: React.FC<Props> = ({ projects, activeId, onSelect, onCr
           {projects.length > 0 ? (
             <select
               value={activeId || ''}
-              onChange={e => e.target.value && onSelect(e.target.value)}
+              onChange={e => {
+                const val = e.target.value;
+                if (val) onSelect(val);
+              }}
               style={{
                 flex: 1, background: '#161616', border: '1px solid #2a2a2a',
                 borderRadius: 4, color: activeId ? '#ddd' : '#666',

@@ -124,19 +124,33 @@ export function usePlaybackKeyboard(
   setMuted: React.Dispatch<React.SetStateAction<boolean>>,
 ) {
   useEffect(() => {
+    // Only treat *text-entry* fields as editable. Range sliders, checkboxes,
+    // buttons, etc. should NOT swallow the Space shortcut.
+    const TEXT_INPUT_TYPES = new Set([
+      'text', 'search', 'url', 'tel', 'email', 'password',
+      'number', 'date', 'datetime-local', 'month', 'week', 'time',
+    ]);
     const isEditableTarget = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
       const tag = el.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      if (tag === 'TEXTAREA') return true;
+      if (tag === 'INPUT') {
+        const type = (el as HTMLInputElement).type.toLowerCase();
+        return TEXT_INPUT_TYPES.has(type);
+      }
       if (el.isContentEditable) return true;
       return false;
     };
-    const onKey = (e: KeyboardEvent) => {
+    // Capture-phase handler so we intercept Space before any focused
+    // button/link/etc. can activate it. Also stop propagation + prevent
+    // default on both keydown and keyup (buttons activate Space on keyup).
+    const onKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (isEditableTarget(e.target)) return;
       if (e.code === 'Space') {
-        if (!mediaElRef.current) return;
         e.preventDefault();
+        e.stopPropagation();
+        if (e.repeat) return;
         togglePlayRef.current();
       } else if (e.key === 'm' || e.key === 'M') {
         if (!mediaElRef.current) return;
@@ -153,7 +167,44 @@ export function usePlaybackKeyboard(
         }
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return;
+      if (isEditableTarget(e.target)) return;
+      // Prevent buttons/links from firing their click on Space keyup.
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    // Auto-blur non-text-input controls after interaction so they can't
+    // capture Space. On macOS, native <select> widgets handle Space at the
+    // OS level before JS events fire, so preventing default isn't enough —
+    // the element must not be focused when Space is pressed.
+    const blurIfNonEditable = () => {
+      const el = document.activeElement;
+      if (el instanceof HTMLElement && !isEditableTarget(el) && el !== document.body && el.tagName !== 'SELECT') {
+        el.blur();
+      }
+    };
+    const onFocusIn = (e: FocusEvent) => {
+      const el = e.target;
+      if (el instanceof HTMLElement && !isEditableTarget(el) && el.tagName !== 'SELECT') {
+        setTimeout(blurIfNonEditable, 0);
+      }
+    };
+    const onSelectChange = (e: Event) => {
+      if (e.target instanceof HTMLSelectElement) e.target.blur();
+    };
+    const onPointerUp = () => setTimeout(blurIfNonEditable, 0);
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
+    document.addEventListener('focusin', onFocusIn);
+    document.addEventListener('pointerup', onPointerUp, true);
+    document.addEventListener('change', onSelectChange, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('pointerup', onPointerUp, true);
+      document.removeEventListener('change', onSelectChange, true);
+    };
   }, [mediaElRef, previewWrapRef, togglePlayRef, setMuted]);
 }
